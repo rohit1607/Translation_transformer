@@ -404,6 +404,145 @@ class create_action_dataset_v2(Dataset):
         return  timesteps, actions, traj_mask, target_state, env_coef_seq, traj_len, idx, flow_dir, rzn
 
 
+
+
+class create_action_dataset_v3(Dataset):
+    def __init__(self, dataset, 
+                        idx_set,
+                        context_len, 
+                        mae_path,
+                        norm_params_4_val=None):
+        """
+        Different from v2:  (see v2 docstring for difference wrt v1)
+            - env_coef_seq return variable is now representation vectors 
+             obtained from an MAE encoder
+            - Yi_r and obs)r are dummy objects in the dataset since 
+                we have combined representations from the MAE encoder
+        
+
+        dataset: [(Yi_r, obs_r, actions_r, states_r,
+                     timesteps_r, dones_r, success_r, 
+                     target_pos_r, start_pos_r, flow_dir, rzn), (..), ...]
+
+        Computes Dones, Normalizes trajs, masks trajs based on their lengths wrt context_len
+        dataset: list of experience dictionaries 
+        context_len: context lenght of the transformer
+        env_info: (String) env name 
+
+        Note: Written for a particular env field
+        """
+
+        self.context_len = context_len
+        self.n_trajs = len(dataset)
+        self.mae = mae
+        self.dataset = dataset
+        # self.X = np.array([np.concatenate((item[0], item[1]), axis=-1) for item in self.dataset])
+        # Y = f(X)
+        # case1: naive- loading data from flow_dir and rzn in each sample of the dataset
+        # self.X = np.array([item[0] for item in self.dataset])
+        self.X = np.array([self.extract_latent_rep(item[-2],item[-1]) for item in self.dataset]) # expected output shape (1?,120,rep_dim)
+        
+        self.X_mean = np.mean(self.X, axis=0)
+        self.X_std = np.std(self.X, axis=0)
+
+        # extract actions (tgt) and scale them to range [0,1)
+        self.Y = [item[2]/(2*np.pi) for item in self.dataset]
+
+        # normalzise
+        if norm_params_4_val == None:
+            for i in range(len(self.X)):
+                self.X[i] = self.X[i] - self.X_mean
+                self.X[i] = np.divide(self.X[i], self.X_std)
+                # self.Y[i] = self.Y[i] - self.Y_mean
+                # self.Y[i] = np.divide(self.Y[i], self.Y_std)
+        else:
+            tr_X_mean, tr_X_std= norm_params_4_val
+            for i in range(len(self.X)):
+                self.X[i] = self.X[i] - tr_X_mean
+                self.X[i] = np.divide(self.X[i], tr_X_std)            
+                # self.Y[i] = self.Y[i] - tr_Y_mean
+                # self.Y[i] = np.divide(self.Y[i], tr_Y_std)
+        # store actions across realizations
+        # TODO: try action normalization
+
+
+
+    def extract_latent_rep(self, flow_dir, rzn):
+        vel_data = load_velocity(flow_dir, rzn) # all_u_mat, all_v_mat, ... put in src_utils outside class
+        vx_vy_list = extract_velocity(vel_data) # vx_vy_list (120, 2,100,100) .... put in src_utils outside class put in src_utils outside class. Use looop if facing difficulty
+        preprocessed_vx_vy_list = preprocess(vx_vy_list) # all mae related preprocessing. Upscaling is a part of this too
+        latent_reps = mae_block_of_code(preprocessed_vx_vy_list)
+        return latent_reps #shape (120, rep_dim)
+        
+        # mae_block_of_code:
+            # mae.eval()
+            # with torch.no_grad():
+            #     loss = mae(image_400.to(device))
+            #     latent = mae.repre_latent()
+        
+    def get_src_stats(self):
+        return (self.X_mean, self.X_std)
+
+
+    # TODO: Verify it returns the no. of trajectories
+    def __len__(self):
+        return len(self.dataset)
+        
+
+    def __getitem__(self, idx):
+        _, _, _, _, _, _, success, target_pos, _, flow_dir, rzn = self.dataset[idx]
+        actions = self.Y[idx]
+        traj_len = len(actions)
+        env_coef_seq = self.X[idx, :self.context_len, :] # X.shape = (B(r), ETA, coefs+obs_tok)
+        padding_len = None
+        if traj_len > self.context_len:
+            # TODO: correcly write if condition
+            # sample random index to slice trajectory
+            si = random.randint(0, traj_len - self.context_len)
+
+            # states = torch.from_numpy(traj['states'][si : si + self.context_len])
+            # # NOTE: add extra padde
+            # states = torch.cat([states, torch.zeros(1,states.shape[1:])], dim=0)
+            try:
+                actions = torch.from_numpy(actions[si : si + self.context_len + 1])
+            except:
+                actions = torch.cat([actions,
+                                    torch.zeros(([1] + list(actions.shape[1:])),
+                                    dtype=actions.dtype)],
+                                    dim=0)
+            timesteps = torch.arange(start=si, end=si+self.context_len, step=1)
+
+            # # all ones since no padding
+            traj_mask = torch.zeros(self.context_len, dtype=torch.long).to(torch.bool)
+            print(f" entering if condition - should not happen for basic cases")
+            print(f"actions.shape = {actions.shape}")
+            print(f"traj_len = {traj_len}")
+            sys.exit()
+        else:
+            padding_len = self.context_len - traj_len 
+
+            # padding with zeros
+            actions = torch.from_numpy(actions)
+
+            # NOTE: paddding_len + 1 for tgt i/o offset for translation tasks
+            actions = torch.cat([actions, # shape (nactions, 1)
+                                # [padding_len+1] is seq_len axis, list(actions.shape[1:] is for everythin apart from seq_len axis
+                                torch.zeros(([padding_len+1] + list(actions.shape[1:])), #[4]+[1]=[4,1]
+                                dtype=actions.dtype)],
+                               dim=0)
+
+
+            timesteps = torch.arange(start=0, end=self.context_len, step=1)
+
+            traj_mask = torch.cat([torch.zeros(traj_len, dtype=torch.long),
+                                   torch.ones(padding_len, dtype=torch.long)],
+                                  dim=0).type(torch.bool)
+        
+        target_state = torch.tensor(target_pos)
+
+
+        return  timesteps, actions, traj_mask, target_state, env_coef_seq, traj_len, idx, flow_dir, rzn
+
 """
 https://pytorch.org/tutorials/beginner/translation_transformer.html
 """
@@ -732,7 +871,8 @@ def simulate_tgt_actions(traj_dataset,
     if env != None:
         plt.xlim([0, env.xlim])
         plt.ylim([0, env.ylim])
- 
+        obstacle = DOLS_obstacle()
+        ax.add_patch(obstacle)
         if env.target_pos.ndim == 1:
             target_circle = plt.Circle(env.target_pos, env.target_rad, color='r', alpha=0.3)
             ax.add_patch(target_circle)
@@ -823,6 +963,8 @@ def visualize_input(traj_dataset,
         plt.ylim([0, env.ylim])
         print("****VERIFY: env.target_pos: ", env.target_pos)
         print(f"**** verify: {len(env.target_pos)}")
+        obstacle = DOLS_obstacle()
+        ax.add_patch(obstacle)
         if env.target_pos.ndim == 1:
             target_circle = plt.Circle(env.target_pos, env.target_rad, color='r', alpha=0.3)
             ax.add_patch(target_circle)
@@ -838,7 +980,7 @@ def visualize_input(traj_dataset,
 
     if log_wandb:
         wandb.log({wandb_fname: wandb.Image(fname)})
-    plt.cla()
+    #plt.cla()
 
 def see_steplr_trend(step_size: int, num_epochs: int, lr=0.001, final_lr=None, gamma=None, show_plot=False):
     nsteps = int(num_epochs/step_size)

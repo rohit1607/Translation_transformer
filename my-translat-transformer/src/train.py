@@ -390,7 +390,8 @@ def train_model(args=None, cfg_name=None):
     # saves model and csv in this directory
     log_dir = join(ROOT, cfg.log_dir)
     tt_eb = cfg.translate_earlybreaks
-
+    # TODO: SHUBHAM: make a new entry called mae_name in cfg_v5_GenHW.yaml
+    # mae_name = cfg.mae_name
     # training and evaluation device
     device = torch.device(cfg.device)
     
@@ -417,6 +418,8 @@ def train_model(args=None, cfg_name=None):
 
     # env = gym.make(env_name)
     # env.setup(cfg, params2, add_trans_noise=add_trans_noise)
+    
+    # TODO: Shubham: Load mae model
 
     # Load and Split dataset
     with open(dataset_path, 'rb') as f:
@@ -449,25 +452,25 @@ def train_model(args=None, cfg_name=None):
                             context_len, 
                             norm_params_4_val = src_stats
                                         )
-
+    
     # train_dataloader = DataLoader(tr_set, batch_size=batch_size)
     # visualize_input(val_set, stats=None, log_wandb=True, at_time=119, info_str='val', color_by_time=False)
     # visualize_input(test_set, stats=None, log_wandb=True, at_time=119, info_str='test', color_by_time=False)
 
     _, dummy_target, _, _, dummy_env_coef_seq, _,_,dummy_flow_dir,_ = tr_set[0]
-    src_vec_dim = dummy_env_coef_seq.shape[-1]
+    src_vec_dim = dummy_env_coef_seq.shape[-1] # TODO: IMP: SHUBHAM: get this from mae model
     tgt_vec_dim = dummy_target.shape[-1]
     print(f"src_vec_dim = {src_vec_dim} \n tgt_vec_dim = {tgt_vec_dim}")
     # intantiate gym env for vizualization purposes
     env_4_viz = setup_env(dummy_flow_dir)
 
-    # visualize_input(tr_set, log_wandb=True, at_time=119, env=env_4_viz)
-    # simulate_tgt_actions(tr_set,
-    #                         env=env_4_viz,
-    #                         log_wandb=True,
-    #                         wandb_fname='simulate_tgt_actions',
-    #                         plot_flow=True,
-    #                         at_time=119)
+    visualize_input(tr_set, log_wandb=True, at_time=99, env=env_4_viz)
+    simulate_tgt_actions(tr_set,
+                            env=env_4_viz,
+                            log_wandb=True,
+                            wandb_fname='simulate_tgt_actions',
+                            plot_flow=True,
+                            at_time=99)
     
     transformer = mySeq2SeqTransformer_v1(num_encoder_layers, num_decoder_layers, embed_dim,
                                  n_heads, src_vec_dim, tgt_vec_dim, 
@@ -705,16 +708,16 @@ class jugaad_cfg:
 def load_prev_and_test(args, cfg_name):
     # load model
     # tmp_path = ROOT + "log/my_translat_GPTdset_DG3_model_04-01-03-20.pt"
-    tmp_path = ROOT + "log/my_translat_GPTdset_DG3_model_03-30-23-11.pt"
+    tmp_path = ROOT + "log/my_translat_DOLS_Cylinder_model_05-19-14-08.pt"
 
     transformer = torch.load(tmp_path)
     model_name = tmp_path[:-3].split('/')[-1]
     # load unseen dataset
-    dataset_path = ROOT + "data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_w5_1dataset_single_25305.pkl"
+    dataset_path = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/DOLS_Cylinder/targ_1/gathered_targ_1.pkl"
     traj_dataset = load_pkl(dataset_path)
     dataset_name = dataset_path[:-4].split('/')[-1]
     # src_stats_path = tmp_path[:-3] + "_src_stats.npy"
-    src_stats_path = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_translat_GPTdset_DG3_model_04-03-14-07_src_stats.npy"
+    src_stats_path = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_translat_DOLS_Cylinder_model_05-19-14-08_src_stats.npy"
     src_stats = np.load(src_stats_path)
     src_stats = (src_stats[0], src_stats[1])
 
@@ -737,19 +740,19 @@ def load_prev_and_test(args, cfg_name):
                             norm_params_4_val = src_stats
                                         )
     
-    # src_stats = us_test_traj_set.get_src_stats()
+    src_stats = us_test_traj_set.get_src_stats()
     test_idx_set = None #TODO: clean unneeded vars and args
     # read cfg not working and requires postprocessing
-    # cfg_path =  tmp_path[:-3] + ".yml"
-    # cfg =  read_cfg_file(cfg_path)
-    cfg = jugaad_cfg(context_len=120, device='cuda')
-    # op_traj_dict_list, results = translate(transformer,us_test_idx_set, us_test_traj_set, 
-    #                                         None, cfg, earlybreak=500)
-    # save_object(op_traj_dict_list,f"/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/paper_plots/my_translat_GPTdset_DG3_model_03-30-23-11/GPTdset_DG3_g100x100x120_r5k_Obsv1_w5_1dataset_single_25305/op_traj_dict_list.pkl")
-    # save_object(results,f"/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/paper_plots/my_translat_GPTdset_DG3_model_03-30-23-11/GPTdset_DG3_g100x100x120_r5k_Obsv1_w5_1dataset_single_25305/results.pkl")
+    cfg_path =  tmp_path[:-3] + ".yml"
+    cfg =  read_cfg_file(cfg_path)
+    #cfg = jugaad_cfg(context_len=120, device='cuda')
+    op_traj_dict_list, results = translate(transformer,us_test_idx_set, us_test_traj_set, 
+                                            None, cfg, earlybreak=500)
+    save_object(op_traj_dict_list,f"/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/paper_plots/my_translat_DOLS_Cylinder_model_05-19-14-08/op_traj_dict_list.pkl")
+    save_object(results,f"/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/paper_plots/my_translat_DOLS_Cylinder_model_05-19-14-08/results.pkl")
 
-    op_traj_dict_list = load_pkl(f"/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/paper_plots/my_translat_GPTdset_DG3_model_03-30-23-11/GPTdset_DG3_g100x100x120_r5k_Obsv1_w5_1dataset_single_25305/op_traj_dict_list.pkl")
-    results = load_pkl(f"/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/paper_plots/my_translat_GPTdset_DG3_model_03-30-23-11/GPTdset_DG3_g100x100x120_r5k_Obsv1_w5_1dataset_single_25305/results.pkl")
+    op_traj_dict_list = load_pkl(f"/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/paper_plots/my_translat_DOLS_Cylinder_model_05-19-14-08/op_traj_dict_list.pkl")
+    results = load_pkl(f"/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/paper_plots/my_translat_DOLS_Cylinder_model_05-19-14-08/results.pkl")
     _, dummy_target, _, _, dummy_env_coef_seq, _,_,dummy_flow_dir,_ = us_test_traj_set[0]
     # intantiate gym env for vizualization purposes
     env_4_viz = setup_env(dummy_flow_dir)
@@ -761,7 +764,8 @@ def load_prev_and_test(args, cfg_name):
     
     # taken from vis_traj_with_attention.py in decision transformer project
     print(f"model_name = {model_name}")
-    save_dir = "paper_plots/"  + model_name + "/" + dataset_name
+    #save_dir = "paper_plots/"  + model_name + "/" + dataset_name
+    save_dir = "paper_plots/"  + model_name
     save_dir = join(ROOT,save_dir)
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
@@ -776,7 +780,7 @@ def load_prev_and_test(args, cfg_name):
     pp = paper_plots(env_4_viz, op_traj_dict_list, src_stats,
                         paper_plot_info=paper_plot_info,
                         save_dir=save_dir)
-    # pp.plot_val_ip_op(us_test_traj_set, test_set_txy_preds, path_lens, success_list)
+    pp.plot_val_ip_op(us_test_traj_set, test_set_txy_preds, path_lens, success_list)
     # pp.plot_traj_by_arr(us_test_traj_set,set_str="_us_test_")
     # pp.plot_train_val_ip_op(train_traj_dataset, val_traj_dataset)
     # pp.plot_traj_by_arr(val_traj_dataset, set_str="_val")

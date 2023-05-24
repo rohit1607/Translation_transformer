@@ -133,7 +133,7 @@ class paper_plots:
         ip_path_lens = [len(item[2]) for item in traj_dataset.dataset] #item[2]
         vmin = min(path_lens + ip_path_lens)
         vmax = max(path_lens + ip_path_lens)
-        vmax = min(vmax, 119)
+        vmax = min(vmax, 99)
         vmax = int(100)
         vmin = int(60)
         # # vmax = 51
