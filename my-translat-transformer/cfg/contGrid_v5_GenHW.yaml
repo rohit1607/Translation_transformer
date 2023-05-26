@@ -19,6 +19,8 @@ dataset_path: "/home/rohit/Documents/Research/Planning_with_transformers/Transla
 log_dir: "log"
 params2_name: "data/DOLS_Cylinder/params.yml"
 
+mae_model_name = "dummy.pt"
+
 random_split: True
 split_tr_tst_val: [0.8, 0.05, 0.15]
 # split_tr_tst_val: [0.01, 0.98, 0.01]

@@ -1,7 +1,9 @@
 import torch
 import numpy as np
 import random
-from torch.utils.data import Dataset
+import torch
+from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
 import pickle
 import wandb
 from sklearn.model_selection import train_test_split
@@ -405,7 +407,32 @@ class create_action_dataset_v2(Dataset):
 
 
 
+def load_velocity(flow_dir):
+    all_u_mat = np.load(flow_dir +'all_u_mat.npy')
+    all_ui_mat = np.load(flow_dir +'all_ui_mat.npy')
+    all_v_mat = np.load(flow_dir +'all_v_mat.npy' )
+    all_vi_mat = np.load(flow_dir +'all_vi_mat.npy')
+    all_Yi = np.load(flow_dir +'all_Yi.npy' )
+    vel_field_data = [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
+    return vel_field_data
 
+def extract_velocity(vel_field_data, t, rzn):
+    nmodes =  vel_field_data[2].shape[1]
+    vx = vel_field_data[0][t,:,:]
+    vy = vel_field_data[1][t,:,:] 
+
+    for m in range(nmodes):
+        vx += vel_field_data[2][t, m, :, :]*vel_field_data[4][t, rzn,m]
+        vy += vel_field_data[3][t, m, :, :] * vel_field_data[4][t, rzn,m]
+
+    return np.stack([vx,vy], axis=0)
+
+def preprocessing_for_mae(vx_vy_list):
+    vx_vy_tensor = torch.tensor(vx_vy_list)
+    vx_vy_tensor = F.interpolate(vx_vy_tensor, size=(256, 256), mode='bilinear', align_corners=False)     #120,2,256,256
+    return vx_vy_tensor    
+    
+    
 class create_action_dataset_v3(Dataset):
     def __init__(self, dataset, 
                         idx_set,
@@ -464,25 +491,36 @@ class create_action_dataset_v3(Dataset):
                 # self.Y[i] = np.divide(self.Y[i], tr_Y_std)
         # store actions across realizations
         # TODO: try action normalization
+        
 
-
-
+    # def extract_latent_rep(self, flow_dir, rzn):
+    #     vel_data = load_velocity(flow_dir) # all_u_mat, all_v_mat, ... put in src_utils outside class
+    #     vx_vy_list = extract_velocity(vel_data, rzn) # vx_vy_list (120, 2,100,100) .... put in src_utils outside class put in src_utils outside class. Use looop if facing difficulty
+    #     preprocessed_vx_vy_list = preprocess(vx_vy_list) # all mae related preprocessing. Upscaling is a part of this too
+    #     latent_reps = mae_block_of_code(preprocessed_vx_vy_list)
+    #     return latent_reps #shape (120, rep_dim)
+        
+    #     # mae_block_of_code:
+    #         # mae.eval()
+    #         # with torch.no_grad():
+    #         #     loss = mae(image_400.to(device))
+    #         #     latent = mae.repre_latent()
+    
     def extract_latent_rep(self, flow_dir, rzn):
-        vel_data = load_velocity(flow_dir, rzn) # all_u_mat, all_v_mat, ... put in src_utils outside class
-        vx_vy_list = extract_velocity(vel_data) # vx_vy_list (120, 2,100,100) .... put in src_utils outside class put in src_utils outside class. Use looop if facing difficulty
-        preprocessed_vx_vy_list = preprocess(vx_vy_list) # all mae related preprocessing. Upscaling is a part of this too
-        latent_reps = mae_block_of_code(preprocessed_vx_vy_list)
+        vel_data = load_velocity(flow_dir) # Shape (list) : [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
+        for t in range(vel_data[2].shape[0]): # Extract velocity over all timesteps
+            temp = extract_velocity(vel_data, t, rzn)
+            vx_vy_list.append(temp)
+        vx_vy_list = np.array(vx_vy_list) # Shape (array) : (120, 2, 100, 100) 
+        preprocessed_vx_vy_list = preprocessing_for_mae(vx_vy_list) # torch.Size([120, 2, 256, 256]) (tensor)
+        self.mae.eval()
+        with torch.no_grad():
+            loss = self.mae(preprocessed_vx_vy_list.to(device))
+            latent_reps = self.mae.repre_latent()
         return latent_reps #shape (120, rep_dim)
-        
-        # mae_block_of_code:
-            # mae.eval()
-            # with torch.no_grad():
-            #     loss = mae(image_400.to(device))
-            #     latent = mae.repre_latent()
-        
+      
     def get_src_stats(self):
         return (self.X_mean, self.X_std)
-
 
     # TODO: Verify it returns the no. of trajectories
     def __len__(self):

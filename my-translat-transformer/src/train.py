@@ -390,8 +390,8 @@ def train_model(args=None, cfg_name=None):
     # saves model and csv in this directory
     log_dir = join(ROOT, cfg.log_dir)
     tt_eb = cfg.translate_earlybreaks
-    # TODO: SHUBHAM: make a new entry called mae_name in cfg_v5_GenHW.yaml
-    # mae_name = cfg.mae_name
+    # TODO: SHUBHAM: make a new entry called mae_name in cfg_v5_GenHW.yaml # DONE
+    mae_model_name = cfg.mae_model_name
     # training and evaluation device
     device = torch.device(cfg.device)
     
@@ -419,8 +419,10 @@ def train_model(args=None, cfg_name=None):
     # env = gym.make(env_name)
     # env.setup(cfg, params2, add_trans_noise=add_trans_noise)
     
-    # TODO: Shubham: Load mae model
-
+    # TODO: Shubham: Load mae model # DONE
+    
+    mae = torch.load(mae_model_name)
+    
     # Load and Split dataset
     with open(dataset_path, 'rb') as f:
         traj_dataset = pickle.load(f)
@@ -434,7 +436,7 @@ def train_model(args=None, cfg_name=None):
 
 
     # dataset contains optimal actions for different realizations of the env
-    tr_set = create_action_dataset_v2(train_traj_set, 
+    tr_set = create_action_dataset_v3(train_traj_set, 
                             train_idx_set,
                             context_len, 
                                         )
@@ -442,12 +444,12 @@ def train_model(args=None, cfg_name=None):
     src_stats = tr_set.get_src_stats()
     src_stats_path = save_model_path[:-3] +"_src_stats.npy"
     np.save(src_stats_path, src_stats)
-    val_set = create_action_dataset_v2(val_traj_set, 
+    val_set = create_action_dataset_v3(val_traj_set, 
                             val_idx_set,
                             context_len,
                             norm_params_4_val = src_stats
                                         )
-    test_set = create_action_dataset_v2(test_traj_set, 
+    test_set = create_action_dataset_v3(test_traj_set, 
                             val_idx_set,
                             context_len, 
                             norm_params_4_val = src_stats
