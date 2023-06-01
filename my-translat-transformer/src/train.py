@@ -4,11 +4,12 @@ import torch.nn.functional as F
 
 from timeit import default_timer as timer
 
-from src_utils import create_action_dataset_v2, compare_trajectories, viz_op_traj_with_attention
+from src_utils import create_action_dataset_v3, compare_trajectories, viz_op_traj_with_attention
 from src_utils import get_data_split, create_mask, denormalize, visualize_output, visualize_input
 from src_utils import see_steplr_trend, simulate_tgt_actions, plot_attention_weights
 from utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object
 from custom_models import mySeq2SeqTransformer_v1
+from train_mae import MAE, ViT, Transformer, PreNorm, FeedForward, Attention
 
 import gym
 import gym_examples
@@ -28,12 +29,15 @@ from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 from paper_plots import paper_plots
 
+# os.environ['CUDA_DEVICE_ORDER']='PCI_BUS_ID'
+# os.environ['CUDA_VISIBLE_DEVICES']='0,1'
+
 wandb.login()
 
-DATASET_CREATION_MAP = {"DOLS": create_action_dataset_v2,
-                        # "GenHW": create_action_dataset_v3,
-                        # "GPT_dset": verify TODO
-                        }
+# DATASET_CREATION_MAP = {"DOLS": create_action_dataset_v2,
+#                         # "GenHW": create_action_dataset_v3,
+#                         # "GPT_dset": verify TODO
+#                         }
 
 
 def setup_env(flow_dir):
@@ -419,8 +423,27 @@ def train_model(args=None, cfg_name=None):
     # env = gym.make(env_name)
     # env.setup(cfg, params2, add_trans_noise=add_trans_noise)
     
-    # TODO: Shubham: Load mae model # DONE
-    
+    # TODO: Shubham: Load mae model # DONE 
+    # Note_to_Rohit : Not sure if this is the right way to load the model. I had tried to load using torch.load but it did not work. 
+    # The solutions suggested I save the state dict and load it in a new instance.
+    # v = ViT(
+    # image_size = 256,
+    # patch_size = 32,    # patch height, patch width
+    # num_classes = 1000,
+    # dim = 1024,
+    # depth = 6,
+    # heads = 8,
+    # mlp_dim = 2048
+    # )
+
+    # mae = MAE(
+    # encoder = v,
+    # masking_ratio = 0.75,   # the paper recommended 75% masked patches
+    # decoder_dim = 512,      # paper showed good results with just 512
+    # decoder_depth = 6       # anywhere from 1 to 8
+    # )
+    # mae.load_state_dict(torch.load(mae_model_name))
+    # mae.to("cuda")
     mae = torch.load(mae_model_name)
     
     # Load and Split dataset
@@ -434,11 +457,16 @@ def train_model(args=None, cfg_name=None):
     train_traj_set, test_traj_set, val_traj_set = set_split
     train_idx_set, test_idx_set, val_idx_set = idx_split
 
-
+    # print(train_traj_set)
+    # print(train_idx_set)
+    
+    # Note_to_Rohit : Added v3 and mae in the arguments 
+    
     # dataset contains optimal actions for different realizations of the env
     tr_set = create_action_dataset_v3(train_traj_set, 
                             train_idx_set,
-                            context_len, 
+                            context_len,
+                            mae, 
                                         )
 
     src_stats = tr_set.get_src_stats()
@@ -447,11 +475,13 @@ def train_model(args=None, cfg_name=None):
     val_set = create_action_dataset_v3(val_traj_set, 
                             val_idx_set,
                             context_len,
+                            mae,
                             norm_params_4_val = src_stats
                                         )
     test_set = create_action_dataset_v3(test_traj_set, 
                             val_idx_set,
-                            context_len, 
+                            context_len,
+                            mae, 
                             norm_params_4_val = src_stats
                                         )
     
@@ -460,8 +490,9 @@ def train_model(args=None, cfg_name=None):
     # visualize_input(test_set, stats=None, log_wandb=True, at_time=119, info_str='test', color_by_time=False)
 
     _, dummy_target, _, _, dummy_env_coef_seq, _,_,dummy_flow_dir,_ = tr_set[0]
-    src_vec_dim = dummy_env_coef_seq.shape[-1] # TODO: IMP: SHUBHAM: get this from mae model
+    src_vec_dim = dummy_env_coef_seq.shape[-1] # TODO: IMP: SHUBHAM: get this from mae model Note_to_Rohit : Not yet done
     tgt_vec_dim = dummy_target.shape[-1]
+    print(dummy_env_coef_seq.shape)
     print(f"src_vec_dim = {src_vec_dim} \n tgt_vec_dim = {tgt_vec_dim}")
     # intantiate gym env for vizualization purposes
     env_4_viz = setup_env(dummy_flow_dir)
@@ -536,7 +567,7 @@ def train_model(args=None, cfg_name=None):
         wandb.log({f"in_eval/lr":  scheduler.get_last_lr()[0]
                        })
         
-        # Evalutation by translation   
+        # Evaluation by translation   
         if epoch % eval_inerval == 0:
             print("plotting attention")
             plot_all_attention_mats(tr_all_att_mat)
@@ -870,7 +901,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', type=str, default='single_run')
     parser.add_argument('--quick_run', type=bool, default=False)
-    parser.add_argument('--CFG', type=str, default='v5_HW')
+    parser.add_argument('--CFG', type=str, default='v5_GenHW')
     args = parser.parse_args()
 
     cfg_name = "cfg/contGrid_" + args.CFG

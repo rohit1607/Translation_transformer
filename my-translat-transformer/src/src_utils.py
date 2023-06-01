@@ -18,6 +18,8 @@ from os.path import join
 from root_path import ROOT
 import sys
 import time
+import re
+from pathlib import Path
 
 
 def get_data_split(traj_dataset, split_ratio=[0.6, 0.2, 0.2], random_seed=42, random_split=True):
@@ -408,11 +410,15 @@ class create_action_dataset_v2(Dataset):
 
 
 def load_velocity(flow_dir):
-    all_u_mat = np.load(flow_dir +'all_u_mat.npy')
-    all_ui_mat = np.load(flow_dir +'all_ui_mat.npy')
-    all_v_mat = np.load(flow_dir +'all_v_mat.npy' )
-    all_vi_mat = np.load(flow_dir +'all_vi_mat.npy')
-    all_Yi = np.load(flow_dir +'all_Yi.npy' )
+    flow_dir = Path(flow_dir)
+    flow_dir = flow_dir.parent
+    flow_dir = flow_dir.parent
+    flow_dir = str(flow_dir)
+    all_u_mat = np.load(flow_dir +'/all_u_mat.npy')
+    all_ui_mat = np.load(flow_dir +'/all_ui_mat.npy')
+    all_v_mat = np.load(flow_dir +'/all_v_mat.npy' )
+    all_vi_mat = np.load(flow_dir +'/all_vi_mat.npy')
+    all_Yi = np.load(flow_dir +'/all_Yi.npy' )
     vel_field_data = [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
     return vel_field_data
 
@@ -437,7 +443,7 @@ class create_action_dataset_v3(Dataset):
     def __init__(self, dataset, 
                         idx_set,
                         context_len, 
-                        mae_path,
+                        mae,
                         norm_params_4_val=None):
         """
         Different from v2:  (see v2 docstring for difference wrt v1)
@@ -506,7 +512,14 @@ class create_action_dataset_v3(Dataset):
     #         #     loss = mae(image_400.to(device))
     #         #     latent = mae.repre_latent()
     
+    # Note_to_Rohit : Implemented the above
+    
     def extract_latent_rep(self, flow_dir, rzn):
+        # m = re.search(r'\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+', flow_dir)
+        # flow_dir_new = flow_dir[:m.end()]
+        # dummy_dir = flow_dir_new
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        vx_vy_list = []
         vel_data = load_velocity(flow_dir) # Shape (list) : [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
         for t in range(vel_data[2].shape[0]): # Extract velocity over all timesteps
             temp = extract_velocity(vel_data, t, rzn)
@@ -514,9 +527,10 @@ class create_action_dataset_v3(Dataset):
         vx_vy_list = np.array(vx_vy_list) # Shape (array) : (120, 2, 100, 100) 
         preprocessed_vx_vy_list = preprocessing_for_mae(vx_vy_list) # torch.Size([120, 2, 256, 256]) (tensor)
         self.mae.eval()
-        with torch.no_grad():
-            loss = self.mae(preprocessed_vx_vy_list.to(device))
-            latent_reps = self.mae.repre_latent()
+        with torch.inference_mode():
+            #loss = self.mae(preprocessed_vx_vy_list.to(device))
+            latent_reps = self.mae.repre_latent(preprocessed_vx_vy_list.to(device))
+            print(latent_reps.shape)
         return latent_reps #shape (120, rep_dim)
       
     def get_src_stats(self):
