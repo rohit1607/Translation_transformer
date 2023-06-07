@@ -180,7 +180,7 @@ class MAE(nn.Module):
         self.decoder_pos_emb = nn.Embedding(num_patches, decoder_dim)
         self.to_pixels = nn.Linear(decoder_dim, pixel_values_per_patch)
 
-    def forward(self, img):
+    def forward(self, img, loss=True):
         device = img.device
 
         patches = self.to_patch(img)           # we have image patches (b c H W -> b n p)  p=patch_dim=c*p1*p2
@@ -229,8 +229,11 @@ class MAE(nn.Module):
         
         self.img_patches = self.to_pixels(decoded_tokens)
 
-        recon_loss = F.mse_loss(pred_pixel_values, masked_patches)
-        return recon_loss
+        if loss==True:
+            recon_loss = F.mse_loss(pred_pixel_values, masked_patches)
+            return recon_loss
+        else:
+            return self.encoder.transformer(self.tokens_blatent)
     
     def final(self):
         return self.img_patches
@@ -333,7 +336,7 @@ if __name__ == "__main__":
     vel_t_r = extract_velocity(vel_field_data, t=80, rzn=10)
     print(vel_t_r.shape)
 
-    batch_size = 16
+    batch_size = 1
     dataset = VelocityDataset(vel_field_data)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     print(dataloader)
@@ -397,7 +400,9 @@ if __name__ == "__main__":
     torch.save(mae, path)
 
     image_400 = dataset.__getitem__(400)
+    print(image_400.shape)
     image_400 = torch.reshape(image_400,(1,2,256,256))
+    print(image_400.shape)
     image_patch = rearrange(image_400,'b c (h p1) (w p2) -> b (h w) (p1 p2 c)', h = 8, w = 8, p1 = 32, p2 = 32, c = 2)
 
     unmasked_img = np.zeros((1,64,2048))
@@ -406,6 +411,6 @@ if __name__ == "__main__":
     with torch.no_grad():
         loss = mae(image_400.to(device))
         re_image_400 = mae.final()
-        latent = mae.repre_latent()
+        latent = mae.repre_latent(image_400.to(device))
         unmasked_ind = mae.unmasked_ind()
         

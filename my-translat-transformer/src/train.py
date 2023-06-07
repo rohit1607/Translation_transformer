@@ -1,6 +1,11 @@
+import os
+os.environ['CUDA_DEVICE_ORDER']='PCI_BUS_ID'
+os.environ['CUDA_VISIBLE_DEVICES']='0,1'
+
 import torch
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
+import torch.nn as nn
 
 from timeit import default_timer as timer
 
@@ -23,14 +28,13 @@ from os.path import join
 from datetime import datetime
 import numpy as np
 from root_path import ROOT
-import os
+
 from transformers import get_cosine_with_hard_restarts_schedule_with_warmup
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 from paper_plots import paper_plots
 
-# os.environ['CUDA_DEVICE_ORDER']='PCI_BUS_ID'
-# os.environ['CUDA_VISIBLE_DEVICES']='0,1'
+
 
 wandb.login()
 
@@ -398,7 +402,7 @@ def train_model(args=None, cfg_name=None):
     mae_model_name = cfg.mae_model_name
     # training and evaluation device
     device = torch.device(cfg.device)
-    
+    torch.cuda.empty_cache()
 
     if ARGS_QR:
         print("\n ---------- Modifying cfg params for quick run --------------- \n")
@@ -423,28 +427,12 @@ def train_model(args=None, cfg_name=None):
     # env = gym.make(env_name)
     # env.setup(cfg, params2, add_trans_noise=add_trans_noise)
     
-    # TODO: Shubham: Load mae model # DONE 
-    # Note_to_Rohit : Not sure if this is the right way to load the model. I had tried to load using torch.load but it did not work. 
-    # The solutions suggested I save the state dict and load it in a new instance.
-    # v = ViT(
-    # image_size = 256,
-    # patch_size = 32,    # patch height, patch width
-    # num_classes = 1000,
-    # dim = 1024,
-    # depth = 6,
-    # heads = 8,
-    # mlp_dim = 2048
-    # )
-
-    # mae = MAE(
-    # encoder = v,
-    # masking_ratio = 0.75,   # the paper recommended 75% masked patches
-    # decoder_dim = 512,      # paper showed good results with just 512
-    # decoder_depth = 6       # anywhere from 1 to 8
-    # )
-    # mae.load_state_dict(torch.load(mae_model_name))
-    # mae.to("cuda")
+    # TODO: Shubham: Load mae model # DONE
+    
     mae = torch.load(mae_model_name)
+    # Note_to_Rohit : Using two GPUs for mae inference. Not sure if this is the correct way to do it as GPU 0 is still running out of memory. 
+    # mae = nn.DataParallel(mae, device_ids=[0,1]).to(device)
+    # print(mae)
     
     # Load and Split dataset
     with open(dataset_path, 'rb') as f:
@@ -497,13 +485,13 @@ def train_model(args=None, cfg_name=None):
     # intantiate gym env for vizualization purposes
     env_4_viz = setup_env(dummy_flow_dir)
 
-    visualize_input(tr_set, log_wandb=True, at_time=99, env=env_4_viz)
+    visualize_input(tr_set, log_wandb=True, at_time=119, env=env_4_viz)
     simulate_tgt_actions(tr_set,
                             env=env_4_viz,
                             log_wandb=True,
                             wandb_fname='simulate_tgt_actions',
                             plot_flow=True,
-                            at_time=99)
+                            at_time=119)
     
     transformer = mySeq2SeqTransformer_v1(num_encoder_layers, num_decoder_layers, embed_dim,
                                  n_heads, src_vec_dim, tgt_vec_dim, 

@@ -472,8 +472,9 @@ class create_action_dataset_v3(Dataset):
         # self.X = np.array([np.concatenate((item[0], item[1]), axis=-1) for item in self.dataset])
         # Y = f(X)
         # case1: naive- loading data from flow_dir and rzn in each sample of the dataset
+        # TO DO: Naive method is slow, have to improve without loop
         # self.X = np.array([item[0] for item in self.dataset])
-        self.X = np.array([self.extract_latent_rep(item[-2],item[-1]) for item in self.dataset]) # expected output shape (1?,120,rep_dim)
+        self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset]) # expected output shape (1?,120,rep_dim)
         
         self.X_mean = np.mean(self.X, axis=0)
         self.X_std = np.std(self.X, axis=0)
@@ -483,8 +484,8 @@ class create_action_dataset_v3(Dataset):
 
         # normalzise
         if norm_params_4_val == None:
-            for i in range(len(self.X)):
-                self.X[i] = self.X[i] - self.X_mean
+            for i in range(len(self.X)): 
+                self.X[i] = self.X[i] - self.X_mean # TO DO: Std deviation RuntimeWarning: invalid value encountered in divide self.X[i] = self.X[i] - self.X_mean
                 self.X[i] = np.divide(self.X[i], self.X_std)
                 # self.Y[i] = self.Y[i] - self.Y_mean
                 # self.Y[i] = np.divide(self.Y[i], self.Y_std)
@@ -527,9 +528,9 @@ class create_action_dataset_v3(Dataset):
         vx_vy_list = np.array(vx_vy_list) # Shape (array) : (120, 2, 100, 100) 
         preprocessed_vx_vy_list = preprocessing_for_mae(vx_vy_list) # torch.Size([120, 2, 256, 256]) (tensor)
         self.mae.eval()
-        with torch.inference_mode():
+        with torch.no_grad():
             #loss = self.mae(preprocessed_vx_vy_list.to(device))
-            latent_reps = self.mae.repre_latent(preprocessed_vx_vy_list.to(device))
+            latent_reps = self.mae(preprocessed_vx_vy_list.to(device),loss=False)
             print(latent_reps.shape)
         return latent_reps #shape (120, rep_dim)
       
@@ -759,8 +760,8 @@ def visualize_output(preds_list,
         plt.ylim([0, env.ylim])
         
         # print("****VERIFY: env.target_pos: ", env.target_pos)
-        obstacle = DOLS_obstacle()
-        ax.add_patch(obstacle)
+        # obstacle = DOLS_obstacle()
+        # ax.add_patch(obstacle)
         if env.target_pos.ndim == 1:
             target_circle = plt.Circle(env.target_pos, env.target_rad, color='r', alpha=0.3)
             ax.add_patch(target_circle)
@@ -923,8 +924,8 @@ def simulate_tgt_actions(traj_dataset,
     if env != None:
         plt.xlim([0, env.xlim])
         plt.ylim([0, env.ylim])
-        obstacle = DOLS_obstacle()
-        ax.add_patch(obstacle)
+        # obstacle = DOLS_obstacle()
+        # ax.add_patch(obstacle)
         if env.target_pos.ndim == 1:
             target_circle = plt.Circle(env.target_pos, env.target_rad, color='r', alpha=0.3)
             ax.add_patch(target_circle)
@@ -1015,8 +1016,8 @@ def visualize_input(traj_dataset,
         plt.ylim([0, env.ylim])
         print("****VERIFY: env.target_pos: ", env.target_pos)
         print(f"**** verify: {len(env.target_pos)}")
-        obstacle = DOLS_obstacle()
-        ax.add_patch(obstacle)
+        # obstacle = DOLS_obstacle()
+        # ax.add_patch(obstacle)
         if env.target_pos.ndim == 1:
             target_circle = plt.Circle(env.target_pos, env.target_rad, color='r', alpha=0.3)
             ax.add_patch(target_circle)
