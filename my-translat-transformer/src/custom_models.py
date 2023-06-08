@@ -39,9 +39,11 @@ class SimplePositionalEncoding(nn.Module):
     def __init__(self, emb_size, max_len):
         super(SimplePositionalEncoding, self).__init__()
         self.pos_embedding = nn.Embedding(max_len, emb_size)
-
+        # TO DO : Raj to check correctness
+        # emb_vec = emb_vec.detach().cpu().numpy()
+        # emb_vec = torch.from_numpy(emb_vec.reshape((-3,)+emb_vec.shape[:2]).transpose(1,2,0))
     def forward(self, emb_vec, timesteps):
-        return self.pos_embedding(timesteps) + emb_vec
+        return self.pos_embedding(timesteps) + torch.mean(emb_vec, dim=2)
 
 # # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 # class TokenEmbedding(nn.Module):
