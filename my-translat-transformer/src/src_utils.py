@@ -474,6 +474,7 @@ class create_action_dataset_v3(Dataset):
         # case1: naive- loading data from flow_dir and rzn in each sample of the dataset
         # TO DO: Naive method is slow, have to improve without loop
         # self.X = np.array([item[0] for item in self.dataset])
+        print("Extracting representations")
         self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset]) # expected output shape (1?,120,rep_dim)
         
         self.X_mean = np.mean(self.X, axis=0)
