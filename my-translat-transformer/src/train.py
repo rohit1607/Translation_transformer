@@ -1,6 +1,6 @@
 import os
-os.environ['CUDA_DEVICE_ORDER']='PCI_BUS_ID'
-os.environ['CUDA_VISIBLE_DEVICES']='0,1'
+# os.environ['CUDA_DEVICE_ORDER']='PCI_BUS_ID'
+# os.environ['CUDA_VISIBLE_DEVICES']='0,1'
 
 import torch
 from torch.utils.data import DataLoader
@@ -9,7 +9,7 @@ import torch.nn as nn
 
 from timeit import default_timer as timer
 
-from src_utils import create_action_dataset_v3, compare_trajectories, viz_op_traj_with_attention
+from src_utils import create_action_dataset_v2, create_action_dataset_v3, compare_trajectories, viz_op_traj_with_attention
 from src_utils import get_data_split, create_mask, denormalize, visualize_output, visualize_input
 from src_utils import see_steplr_trend, simulate_tgt_actions, plot_attention_weights
 from utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object
@@ -427,8 +427,6 @@ def train_model(args=None, cfg_name=None):
     # env = gym.make(env_name)
     # env.setup(cfg, params2, add_trans_noise=add_trans_noise)
     
-    # TODO: Shubham: Load mae model # DONE
-    
     mae = torch.load(mae_model_name)
     # Note_to_Rohit : Using two GPUs for mae inference. Not sure if this is the correct way to do it as GPU 0 is still running out of memory. 
     # mae = nn.DataParallel(mae, device_ids=[0,1]).to(device)
@@ -447,8 +445,7 @@ def train_model(args=None, cfg_name=None):
 
     # print(train_traj_set)
     # print(train_idx_set)
-    
-    # Note_to_Rohit : Added v3 and mae in the arguments 
+
     
     # dataset contains optimal actions for different realizations of the env
     tr_set = create_action_dataset_v3(train_traj_set, 
@@ -478,20 +475,20 @@ def train_model(args=None, cfg_name=None):
     # visualize_input(test_set, stats=None, log_wandb=True, at_time=119, info_str='test', color_by_time=False)
 
     _, dummy_target, _, _, dummy_env_coef_seq, _,_,dummy_flow_dir,_ = tr_set[0]
-    src_vec_dim = dummy_env_coef_seq.shape[-1] # TODO: IMP: SHUBHAM: get this from mae model Note_to_Rohit : Not yet done
+    src_vec_dim = dummy_env_coef_seq.shape[-1] 
     tgt_vec_dim = dummy_target.shape[-1]
     print(dummy_env_coef_seq.shape)
     print(f"src_vec_dim = {src_vec_dim} \n tgt_vec_dim = {tgt_vec_dim}")
     # intantiate gym env for vizualization purposes
     env_4_viz = setup_env(dummy_flow_dir)
 
-    visualize_input(tr_set, log_wandb=True, at_time=119, env=env_4_viz)
-    simulate_tgt_actions(tr_set,
-                            env=env_4_viz,
-                            log_wandb=True,
-                            wandb_fname='simulate_tgt_actions',
-                            plot_flow=True,
-                            at_time=119)
+    # visualize_input(tr_set, log_wandb=True, at_time=119, env=env_4_viz)
+    # simulate_tgt_actions(tr_set,
+    #                         env=env_4_viz,
+    #                         log_wandb=True,
+    #                         wandb_fname='simulate_tgt_actions',
+    #                         plot_flow=True,
+    #                         at_time=119)
     
     transformer = mySeq2SeqTransformer_v1(num_encoder_layers, num_decoder_layers, embed_dim,
                                  n_heads, src_vec_dim, tgt_vec_dim, 
@@ -613,7 +610,7 @@ def train_model(args=None, cfg_name=None):
                                 show_scatter=False,
                                 plot_flow=True,
                                 at_time=88,
-                                model_name="DOLS"+"_on_"+dataset_name
+                                model_name="GenHW"+"_on_"+dataset_name
                                 )  
                         
             val_op_traj_dict_list, val_results = translate(transformer, val_idx_set, val_set, None, 

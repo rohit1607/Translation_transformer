@@ -15,14 +15,14 @@ add_transition_noise_during_inf: False
 noise_var: [0.1,0]
 
 dataset_name: "GenHW"
-dataset_path: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/GenHW/Gathered_datasets/gathered_5.pkl"
+dataset_path: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/GenHW/Gathered_datasets/gathered_4.pkl"
 log_dir: "log"
 params2_name: "data/DOLS_Cylinder/params.yml"
 
-mae_model_name: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/saved_mae_models/mae_trial.pt"
+mae_model_name: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/saved_mae_models/mae_trial_100.pt"
 
 random_split: True
-split_tr_tst_val: [0.8, 0.05, 0.15]
+split_tr_tst_val: [0.6, 0.2, 0.2]
 # split_tr_tst_val: [0.01, 0.98, 0.01]
 
 split_ran_seed: 42
@@ -40,7 +40,7 @@ final_lr: 0.000001
 use_scheduler: True
 wt_decay: 0.001
 warmup_steps: 10000
-num_epochs: 200
+num_epochs: 20
 num_updates_per_iter: 500
 add_target_loss: False
 a_tl: 1000

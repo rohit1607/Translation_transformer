@@ -39,11 +39,16 @@ class SimplePositionalEncoding(nn.Module):
     def __init__(self, emb_size, max_len):
         super(SimplePositionalEncoding, self).__init__()
         self.pos_embedding = nn.Embedding(max_len, emb_size)
+        
         # TO DO : Raj to check correctness
         # emb_vec = emb_vec.detach().cpu().numpy()
         # emb_vec = torch.from_numpy(emb_vec.reshape((-3,)+emb_vec.shape[:2]).transpose(1,2,0))
+        
     def forward(self, emb_vec, timesteps):
-        return self.pos_embedding(timesteps) + torch.mean(emb_vec, dim=2)
+        emb = self.pos_embedding(timesteps) + emb_vec
+        # emb = self.pos_embedding(timesteps) + torch.mean(emb_vec, dim=2)
+
+        return emb
 
 # # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 # class TokenEmbedding(nn.Module):
@@ -62,7 +67,8 @@ class LinTokenEmbedding(nn.Module):
         self.emb_size = emb_size
 
     def forward(self, tokens: Tensor):
-        return self.embedding(tokens.to(torch.float32)) * math.sqrt(self.emb_size)  
+        a= self.embedding(tokens.to(torch.float32)) * math.sqrt(self.emb_size)  
+        return a
 
 # Seq2Seq Network
 class mySeq2SeqTransformer_v1(nn.Module):

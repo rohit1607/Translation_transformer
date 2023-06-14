@@ -73,7 +73,7 @@ class paper_plots:
         sm = cm.ScalarMappable(norm=cNorm, cmap=cmap)
 
         self.setup_ax(ax)       
-        im = self.plot_vel_field(ax,t=vmax, r=199)
+        im = self.plot_vel_field(ax,t=vmax, r=9999)
         # traj_dataset=random.shuffle(traj_dataset)
         for idx, traj in enumerate(traj_dataset):
             timesteps, states, actions, returns_to_go, traj_mask, _ = traj
@@ -149,7 +149,7 @@ class paper_plots:
 
         ax = axs[0]
         self.setup_ax(ax)       
-        im = self.plot_vel_field(ax,t=vmax,r=199)
+        im = self.plot_vel_field(ax,t=vmax,r=9999)
         self.plot_obstacle(ax, xyw=xyw)
         # traj_dataset=random.shuffle(traj_dataset)
 
@@ -167,7 +167,7 @@ class paper_plots:
         pr_t_dones = []
         ax = axs[1]
         self.setup_ax(ax, show_ylabel=False)
-        im = self.plot_vel_field(ax,t=vmax,r=199)
+        im = self.plot_vel_field(ax,t=vmax,r=9999)
         self.plot_obstacle(ax, xyw=xyw)
 
         for idx, traj in enumerate(preds_list[:1500]):
@@ -231,7 +231,7 @@ class paper_plots:
 
         ax = axs[0]
         self.setup_ax(ax)       
-        im = self.plot_vel_field(ax,t=vmax,r=199)
+        im = self.plot_vel_field(ax,t=vmax,r=9999)
         # traj_dataset=random.shuffle(traj_dataset)
         for idx, traj in enumerate(tr_traj_dataset):
             timesteps, states, actions, returns_to_go, traj_mask,_ = traj
@@ -245,7 +245,7 @@ class paper_plots:
 
         ax = axs[1]
         self.setup_ax(ax)       
-        im = self.plot_vel_field(ax,t=vmax,r=199)
+        im = self.plot_vel_field(ax,t=vmax,r=9999)
         # traj_dataset=random.shuffle(traj_dataset)
         for idx, traj in enumerate(val_traj_dataset):
             timesteps, states, actions, returns_to_go, traj_mask,_ = traj
@@ -260,7 +260,7 @@ class paper_plots:
         pr_t_dones = []
         ax = axs[2]
         self.setup_ax(ax, show_ylabel=False)
-        im = self.plot_vel_field(ax,t=vmax,r=199)
+        im = self.plot_vel_field(ax,t=vmax,r=9999)
         print(f"{len(self.op_traj_dict_list)}")
         # sys.exit()
         for idx,traj in enumerate(self.op_traj_dict_list):

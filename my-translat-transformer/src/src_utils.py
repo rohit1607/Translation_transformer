@@ -464,6 +464,7 @@ class create_action_dataset_v3(Dataset):
 
         Note: Written for a particular env field
         """
+        std_eps = 1e-6
 
         self.context_len = context_len
         self.n_trajs = len(dataset)
@@ -479,7 +480,7 @@ class create_action_dataset_v3(Dataset):
         
         self.X_mean = np.mean(self.X, axis=0)
         self.X_std = np.std(self.X, axis=0)
-
+        self.X_std[np.where(self.X_std==0)] = std_eps
         # extract actions (tgt) and scale them to range [0,1)
         self.Y = [item[2]/(2*np.pi) for item in self.dataset]
 
@@ -487,11 +488,14 @@ class create_action_dataset_v3(Dataset):
         if norm_params_4_val == None:
             for i in range(len(self.X)): 
                 self.X[i] = self.X[i] - self.X_mean # TO DO: Std deviation RuntimeWarning: invalid value encountered in divide self.X[i] = self.X[i] - self.X_mean
+                # TODO: some std_devs are 0. need to handle them
                 self.X[i] = np.divide(self.X[i], self.X_std)
                 # self.Y[i] = self.Y[i] - self.Y_mean
                 # self.Y[i] = np.divide(self.Y[i], self.Y_std)
         else:
             tr_X_mean, tr_X_std= norm_params_4_val
+            tr_X_std[np.where(tr_X_std==0)] = std_eps
+           
             for i in range(len(self.X)):
                 self.X[i] = self.X[i] - tr_X_mean
                 self.X[i] = np.divide(self.X[i], tr_X_std)            
@@ -527,12 +531,15 @@ class create_action_dataset_v3(Dataset):
             temp = extract_velocity(vel_data, t, rzn)
             vx_vy_list.append(temp)
         vx_vy_list = np.array(vx_vy_list) # Shape (array) : (120, 2, 100, 100) 
-        preprocessed_vx_vy_list = preprocessing_for_mae(vx_vy_list) # torch.Size([120, 2, 256, 256]) (tensor)
+        preprocessed_vx_vy = preprocessing_for_mae(vx_vy_list) # torch.Size([120, 2, 256, 256]) (tensor)
         self.mae.eval()
         with torch.no_grad():
             #loss = self.mae(preprocessed_vx_vy_list.to(device))
-            latent_reps = self.mae(preprocessed_vx_vy_list.to(device),loss=False)
+            latent_reps = self.mae(preprocessed_vx_vy.to(device),loss=False)
+            shape = latent_reps.shape
+            latent_reps = torch.reshape(latent_reps, (shape[0],-1))
             print(latent_reps.shape)
+            
         return latent_reps #shape (120, rep_dim)
       
     def get_src_stats(self):
@@ -1243,8 +1250,8 @@ def viz_op_traj_with_attention(txy_preds_list,
         plt.xlim([0, env.xlim])
         plt.ylim([0, env.ylim])
         # print("****VERIFY: env.target_pos: ", env.target_pos)
-        obstacle = DOLS_obstacle()
-        ax.add_patch(obstacle)
+        # obstacle = DOLS_obstacle()
+        # ax.add_patch(obstacle)
         if env.target_pos.ndim == 1:
             target_circle = plt.Circle(env.target_pos, env.target_rad, color='r', alpha=0.3)
             ax.add_patch(target_circle)
@@ -1314,3 +1321,11 @@ def setup_ax(ax,env, show_xlabel= True,
                 ax.scatter(target_pos[0], target_pos[1], color='k', marker='*')
                 target_circle = plt.Circle(target_pos, env.target_rad, color='r', alpha=0.3)
                 ax.add_patch(target_circle)
+                
+                
+                
+                
+def n_nans(var): 
+    import numpy as np
+    shape = var.shape
+    return np.sum(np.int32(np.isnan(var.cpu().detach().numpy()))),   len(var.reshape(-1,))
