@@ -15,7 +15,7 @@ add_transition_noise_during_inf: False
 noise_var: [0.1,0]
 
 dataset_name: "GenHW"
-dataset_path: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/GenHW/Gathered_datasets/gathered_4.pkl"
+dataset_path: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/GenHW/Gathered_datasets/gathered_3.pkl"
 log_dir: "log"
 params2_name: "data/DOLS_Cylinder/params.yml"
 

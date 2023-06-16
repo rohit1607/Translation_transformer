@@ -554,7 +554,10 @@ class create_action_dataset_v3(Dataset):
         _, _, _, _, _, _, success, target_pos, _, flow_dir, rzn = self.dataset[idx]
         actions = self.Y[idx]
         traj_len = len(actions)
+        self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset])
         env_coef_seq = self.X[idx, :self.context_len, :] # X.shape = (B(r), ETA, coefs+obs_tok)
+        
+        
         padding_len = None
         if traj_len > self.context_len:
             # TODO: correcly write if condition
