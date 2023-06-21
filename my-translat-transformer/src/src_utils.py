@@ -464,41 +464,48 @@ class create_action_dataset_v3(Dataset):
 
         Note: Written for a particular env field
         """
-        std_eps = 1e-6
+        self.std_eps = 1e-6
 
         self.context_len = context_len
         self.n_trajs = len(dataset)
         self.mae = mae
         self.dataset = dataset
+        # extract actions (tgt) and scale them to range [0,1)
+        self.Y = [item[2]/(2*np.pi) for item in self.dataset]
+
         # self.X = np.array([np.concatenate((item[0], item[1]), axis=-1) for item in self.dataset])
         # Y = f(X)
         # case1: naive- loading data from flow_dir and rzn in each sample of the dataset
         # TO DO: Naive method is slow, have to improve without loop
         # self.X = np.array([item[0] for item in self.dataset])
-        print("Extracting representations")
-        self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset]) # expected output shape (1?,120,rep_dim)
-        
-        self.X_mean = np.mean(self.X, axis=0)
-        self.X_std = np.std(self.X, axis=0)
-        self.X_std[np.where(self.X_std==0)] = std_eps
-        # extract actions (tgt) and scale them to range [0,1)
-        self.Y = [item[2]/(2*np.pi) for item in self.dataset]
 
-        # normalzise
-        if norm_params_4_val == None:
-            for i in range(len(self.X)): 
-                self.X[i] = self.X[i] - self.X_mean # TO DO: Std deviation RuntimeWarning: invalid value encountered in divide self.X[i] = self.X[i] - self.X_mean
-                # TODO: some std_devs are 0. need to handle them
-                self.X[i] = np.divide(self.X[i], self.X_std)
-                # self.Y[i] = self.Y[i] - self.Y_mean
-                # self.Y[i] = np.divide(self.Y[i], self.Y_std)
-        else:
-            tr_X_mean, tr_X_std= norm_params_4_val
-            tr_X_std[np.where(tr_X_std==0)] = std_eps
+        ## Old version - Rewritten in __getitem__ on 19.0.23
+        # print("Extracting representations")
+        # self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset]) # expected output shape (1?,120,rep_dim)
+        
+        # self.X_mean = np.mean(self.X, axis=0)
+        # self.X_std = np.std(self.X, axis=0)
+        # self.X_std[np.where(self.X_std==0)] = std_eps
+
+
+        # # normalzise
+        # if norm_params_4_val == None:
+        #     for i in range(len(self.X)): 
+        #         self.X[i] = self.X[i] - self.X_mean # TO DO: Std deviation RuntimeWarning: invalid value encountered in divide self.X[i] = self.X[i] - self.X_mean
+        #         # TODO: some std_devs are 0. need to handle them
+        #         self.X[i] = np.divide(self.X[i], self.X_std)
+        #         # self.Y[i] = self.Y[i] - self.Y_mean
+        #         # self.Y[i] = np.divide(self.Y[i], self.Y_std)
+        # else:
+        #     tr_X_mean, tr_X_std= norm_params_4_val
+        #     tr_X_std[np.where(tr_X_std==0)] = std_eps
            
-            for i in range(len(self.X)):
-                self.X[i] = self.X[i] - tr_X_mean
-                self.X[i] = np.divide(self.X[i], tr_X_std)            
+        #     for i in range(len(self.X)):
+        #         self.X[i] = self.X[i] - tr_X_mean
+        #         self.X[i] = np.divide(self.X[i], tr_X_std)   
+        ## Old version - Rewritten in __getitem__ on 19.0.23
+
+
                 # self.Y[i] = self.Y[i] - tr_Y_mean
                 # self.Y[i] = np.divide(self.Y[i], tr_Y_std)
         # store actions across realizations
@@ -525,6 +532,7 @@ class create_action_dataset_v3(Dataset):
         # flow_dir_new = flow_dir[:m.end()]
         # dummy_dir = flow_dir_new
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # device = torch.device("cpu")
         vx_vy_list = []
         vel_data = load_velocity(flow_dir) # Shape (list) : [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
         for t in range(vel_data[2].shape[0]): # Extract velocity over all timesteps
@@ -540,10 +548,11 @@ class create_action_dataset_v3(Dataset):
             latent_reps = torch.reshape(latent_reps, (shape[0],-1))
             print(latent_reps.shape)
             
-        return latent_reps #shape (120, rep_dim)
+        return latent_reps.cpu() #shape (120, rep_dim)
       
-    def get_src_stats(self):
-        return (self.X_mean, self.X_std)
+      
+    # def get_src_stats(self):
+    #     return (self.X_mean, self.X_std)
 
     # TODO: Verify it returns the no. of trajectories
     def __len__(self):
@@ -554,8 +563,18 @@ class create_action_dataset_v3(Dataset):
         _, _, _, _, _, _, success, target_pos, _, flow_dir, rzn = self.dataset[idx]
         actions = self.Y[idx]
         traj_len = len(actions)
-        self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset])
-        env_coef_seq = self.X[idx, :self.context_len, :] # X.shape = (B(r), ETA, coefs+obs_tok)
+        # self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset]) # Old version
+        # env_coef_seq = self.X[idx, :self.context_len, :] # X.shape = (B(r), ETA, coefs+obs_tok) # Old version
+        # env_coef_seq = np.array([self.extract_latent_rep(flow_dir,rzn).cpu().numpy()])
+        env_coef_seq = self.extract_latent_rep(flow_dir,rzn)
+
+        # Layer normalization
+        env_coef_seq_mean = torch.mean(env_coef_seq, axis=-1).reshape(-1,1)
+        env_coef_seq_std = torch.std(env_coef_seq, axis=-1).reshape(-1,1)
+        env_coef_seq_std[torch.where(env_coef_seq_std==0)] = self.std_eps
+
+        env_coef_seq = env_coef_seq - env_coef_seq_mean
+        env_coef_seq = torch.divide(env_coef_seq, env_coef_seq_std)
         
         
         padding_len = None

@@ -99,12 +99,11 @@ def plot_all_attention_mats(all_att_mats, log_wandb=True, model_name=''):
     
     return 
 
-def train_epoch(model, optimizer, tr_set, cfg, args, scheduler=None, log_interval=50):
+def train_epoch(model, optimizer, train_dataloader, cfg, args, scheduler=None, log_interval=50):
     model.train()
     # losses = 0
     avg_loss = 0
-    # TODO: take it outside
-    train_dataloader = DataLoader(tr_set, batch_size=cfg.batch_size, shuffle=True)
+
     loss = 0
     count=  0
     # for env_coef_seq, tgt in train_dataloader:
@@ -167,12 +166,11 @@ def train_epoch(model, optimizer, tr_set, cfg, args, scheduler=None, log_interva
     return avg_loss, all_att_mats
 
 
-def evaluate(model, val_set, cfg, log_interval=10):
+def evaluate(model, val_dataloader, cfg, log_interval=10):
     model.eval()
     # losses = 0
     avg_loss = 0
-    bs = cfg.batch_size*10
-    val_dataloader = DataLoader(val_set, batch_size=bs, shuffle=True)
+
 
     count=  0
     for timesteps, tgt, traj_mask, target_state, env_coef_seq, traj_len, idx, _, _ in val_dataloader:
@@ -213,10 +211,9 @@ def evaluate(model, val_set, cfg, log_interval=10):
     all_att_mats = extract_attention_scores(model)
     return avg_loss, all_att_mats
 
-
-def translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg, earlybreak=10**8):
+# TODO: remove test_idx and tr_set_stats from args later for cleanup
+def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, cfg, earlybreak=10**8):
     model.eval()
-    test_dataloader = DataLoader(test_set, batch_size=1, shuffle=False)
     count = 0           # keeps count of total episodes
     success_count = 0   # keeps count of successful episodes
     success_count_ = 0
@@ -336,6 +333,7 @@ def translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg, ear
 
 
 def train_model(args=None, cfg_name=None):
+    
 
     start_time = datetime.now().replace(microsecond=0)
     start_time_str = start_time.strftime("%m-%d-%H-%M")
@@ -446,31 +444,52 @@ def train_model(args=None, cfg_name=None):
     # print(train_traj_set)
     # print(train_idx_set)
 
+    torch.multiprocessing.set_start_method('spawn')
     
     # dataset contains optimal actions for different realizations of the env
-    tr_set = create_action_dataset_v3(train_traj_set, 
-                            train_idx_set,
-                            context_len,
-                            mae, 
+    tr_set = create_action_dataset_v3(dataset=train_traj_set, 
+                            #train_idx_set,
+                            idx_set=train_idx_set,
+                            context_len=context_len,
+                            mae=mae, 
                                         )
-
-    src_stats = tr_set.get_src_stats()
-    src_stats_path = save_model_path[:-3] +"_src_stats.npy"
-    np.save(src_stats_path, src_stats)
+    print("8888888888888888888888888888888")
+    # src_stats = tr_set.get_src_stats()
+    # src_stats_path = save_model_path[:-3] +"_src_stats.npy"
+    # np.save(src_stats_path, src_stats)
     val_set = create_action_dataset_v3(val_traj_set, 
                             val_idx_set,
                             context_len,
                             mae,
-                            norm_params_4_val = src_stats
+                            
                                         )
     test_set = create_action_dataset_v3(test_traj_set, 
                             val_idx_set,
                             context_len,
                             mae, 
-                            norm_params_4_val = src_stats
+                            
                                         )
     
-    # train_dataloader = DataLoader(tr_set, batch_size=batch_size)
+    train_dataloader = DataLoader(tr_set, batch_size=cfg.batch_size, shuffle=True,
+                                  num_workers=10, pin_memory=True)
+    bs = cfg.batch_size*10 # RODO: remember why we did this?
+    val_dataloader = DataLoader(val_set, batch_size=bs, shuffle=True)
+    test_dataloader = DataLoader(test_set, batch_size=1, shuffle=False)
+    from time import time
+    import multiprocessing as mp
+    for num_workers in range(2, mp.cpu_count(), 4):  
+        print(f"Num workers:{num_workers}")
+        train_loader = DataLoader(tr_set,shuffle=True,num_workers=num_workers,batch_size=32,pin_memory=True)
+        start = time()
+        for epoch in range(1):
+            for i, data in enumerate(train_loader, 0):
+                pass
+        end = time()
+        with open(join("/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/src", f"num-workers.txt"), 'a') as f:
+            f.write("Finish with:{} second, num_workers={}".format(end - start, num_workers))
+    #     print("Finish with:{} second, num_workers={}".format(end - start, num_workers))
+
+    
     # visualize_input(val_set, stats=None, log_wandb=True, at_time=119, info_str='val', color_by_time=False)
     # visualize_input(test_set, stats=None, log_wandb=True, at_time=119, info_str='test', color_by_time=False)
 
@@ -489,6 +508,7 @@ def train_model(args=None, cfg_name=None):
     #                         wandb_fname='simulate_tgt_actions',
     #                         plot_flow=True,
     #                         at_time=119)
+
     
     transformer = mySeq2SeqTransformer_v1(num_encoder_layers, num_decoder_layers, embed_dim,
                                  n_heads, src_vec_dim, tgt_vec_dim, 
@@ -536,6 +556,7 @@ def train_model(args=None, cfg_name=None):
     wandb.run.summary["trainable params"] = pytorch_trainable_params
 
 
+
     min_ETA = 10**5
     max_sr = -1
     # train_loss = 0
@@ -544,7 +565,7 @@ def train_model(args=None, cfg_name=None):
         print(f"epoch {epoch}")
         epoch_start_time = timer()
         print("training")
-        train_loss, tr_all_att_mat = train_epoch(transformer, optimizer, tr_set, cfg, args, scheduler=scheduler)
+        train_loss, tr_all_att_mat = train_epoch(transformer, optimizer, train_dataloader, cfg, args, scheduler=scheduler)
         epoch_end_time = timer()
         print("evaluating")
         val_loss, val_all_att_mat = evaluate(transformer, val_set, cfg)
@@ -883,6 +904,7 @@ NAME_MAP = {
 if __name__ == "__main__":
 
     print(f"cuda available: {torch.cuda.is_available()}")
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', type=str, default='single_run')
     parser.add_argument('--quick_run', type=bool, default=False)
