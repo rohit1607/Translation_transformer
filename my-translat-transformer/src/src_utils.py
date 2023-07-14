@@ -20,6 +20,9 @@ import sys
 import time
 import re
 from pathlib import Path
+from utils import read_cfg_file
+import gym
+import gym_examples
 
 
 def get_data_split(traj_dataset, split_ratio=[0.6, 0.2, 0.2], random_seed=42, random_split=True):
@@ -510,45 +513,30 @@ class create_action_dataset_v3(Dataset):
                 # self.Y[i] = np.divide(self.Y[i], tr_Y_std)
         # store actions across realizations
         # TODO: try action normalization
-        
-
+    
+    ## ----------- Shifted outside --------- 
     # def extract_latent_rep(self, flow_dir, rzn):
-    #     vel_data = load_velocity(flow_dir) # all_u_mat, all_v_mat, ... put in src_utils outside class
-    #     vx_vy_list = extract_velocity(vel_data, rzn) # vx_vy_list (120, 2,100,100) .... put in src_utils outside class put in src_utils outside class. Use looop if facing difficulty
-    #     preprocessed_vx_vy_list = preprocess(vx_vy_list) # all mae related preprocessing. Upscaling is a part of this too
-    #     latent_reps = mae_block_of_code(preprocessed_vx_vy_list)
-    #     return latent_reps #shape (120, rep_dim)
-        
-    #     # mae_block_of_code:
-    #         # mae.eval()
-    #         # with torch.no_grad():
-    #         #     loss = mae(image_400.to(device))
-    #         #     latent = mae.repre_latent()
-    
-    # Note_to_Rohit : Implemented the above
-    
-    def extract_latent_rep(self, flow_dir, rzn):
-        # m = re.search(r'\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+', flow_dir)
-        # flow_dir_new = flow_dir[:m.end()]
-        # dummy_dir = flow_dir_new
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # device = torch.device("cpu")
-        vx_vy_list = []
-        vel_data = load_velocity(flow_dir) # Shape (list) : [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
-        for t in range(vel_data[2].shape[0]): # Extract velocity over all timesteps
-            temp = extract_velocity(vel_data, t, rzn)
-            vx_vy_list.append(temp)
-        vx_vy_list = np.array(vx_vy_list) # Shape (array) : (120, 2, 100, 100) 
-        preprocessed_vx_vy = preprocessing_for_mae(vx_vy_list) # torch.Size([120, 2, 256, 256]) (tensor)
-        self.mae.eval()
-        with torch.no_grad():
-            #loss = self.mae(preprocessed_vx_vy_list.to(device))
-            latent_reps = self.mae(preprocessed_vx_vy.to(device),loss=False)
-            shape = latent_reps.shape
-            latent_reps = torch.reshape(latent_reps, (shape[0],-1))
-            print(latent_reps.shape)
+    #     # m = re.search(r'\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+', flow_dir)
+    #     # flow_dir_new = flow_dir[:m.end()]
+    #     # dummy_dir = flow_dir_new
+    #     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #     # device = torch.device("cpu")
+    #     vx_vy_list = []
+    #     vel_data = load_velocity(flow_dir) # Shape (list) : [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
+    #     for t in range(vel_data[2].shape[0]): # Extract velocity over all timesteps
+    #         temp = extract_velocity(vel_data, t, rzn)
+    #         vx_vy_list.append(temp)
+    #     vx_vy_list = np.array(vx_vy_list) # Shape (array) : (120, 2, 100, 100) 
+    #     preprocessed_vx_vy = preprocessing_for_mae(vx_vy_list) # torch.Size([120, 2, 256, 256]) (tensor)
+    #     self.mae.eval()
+    #     with torch.no_grad():
+    #         #loss = self.mae(preprocessed_vx_vy_list.to(device))
+    #         latent_reps = self.mae(preprocessed_vx_vy.to(device),loss=False)
+    #         shape = latent_reps.shape
+    #         latent_reps = torch.reshape(latent_reps, (shape[0],-1))
+    #         print(latent_reps.shape)
             
-        return latent_reps.cpu() #shape (120, rep_dim)
+    #     return latent_reps.cpu() #shape (120, rep_dim)
       
       
     # def get_src_stats(self):
@@ -560,14 +548,14 @@ class create_action_dataset_v3(Dataset):
         
 
     def __getitem__(self, idx):
-        _, _, _, _, _, _, success, target_pos, _, flow_dir, rzn = self.dataset[idx]
+        env_coef_seq, _, _, _, _, _, success, target_pos, _, flow_dir, rzn = self.dataset[idx]
         actions = self.Y[idx]
         traj_len = len(actions)
         # self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset]) # Old version
         # env_coef_seq = self.X[idx, :self.context_len, :] # X.shape = (B(r), ETA, coefs+obs_tok) # Old version
         # env_coef_seq = np.array([self.extract_latent_rep(flow_dir,rzn).cpu().numpy()])
-        env_coef_seq = self.extract_latent_rep(flow_dir,rzn)
-
+        # env_coef_seq = self.extract_latent_rep(flow_dir,rzn)
+        
         # Layer normalization
         env_coef_seq_mean = torch.mean(env_coef_seq, axis=-1).reshape(-1,1)
         env_coef_seq_std = torch.std(env_coef_seq, axis=-1).reshape(-1,1)
@@ -625,6 +613,114 @@ class create_action_dataset_v3(Dataset):
 
 
         return  timesteps, actions, traj_mask, target_state, env_coef_seq, traj_len, idx, flow_dir, rzn
+
+
+class create_action_dataset_v4(Dataset):
+    def __init__(self, dataset, 
+                        idx_set,
+                        context_len, 
+                        mae,
+                        norm_params_4_val=None):
+        """
+        Different from v3:  (see v2 docstring for difference wrt v1)
+            - returns start and end locations as part of input seqence        
+
+        dataset: [(Yi_r, obs_r, actions_r, states_r,
+                     timesteps_r, dones_r, success_r, 
+                     target_pos_r, start_pos_r, flow_dir, rzn), (..), ...]
+
+        Computes Dones, Normalizes trajs, masks trajs based on their lengths wrt context_len
+        dataset: list of experience dictionaries 
+        context_len: context lenght of the transformer
+        env_info: (String) env name 
+
+        Note: Written for a particular env field
+        """
+        self.std_eps = 1e-6
+
+        self.context_len = context_len
+        self.n_trajs = len(dataset)
+        self.mae = mae
+        self.dataset = dataset
+        # extract actions (tgt) and scale them to range [0,1)
+        self.Y = [item[2]/(2*np.pi) for item in self.dataset]
+
+
+    def __len__(self):
+        return len(self.dataset)
+        
+
+    def __getitem__(self, idx):
+        env_coef_seq, _, _, _, _, _, success, target_pos, start_pos, flow_dir, rzn = self.dataset[idx]
+        actions = self.Y[idx]
+        traj_len = len(actions)
+        # self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset]) # Old version
+        # env_coef_seq = self.X[idx, :self.context_len, :] # X.shape = (B(r), ETA, coefs+obs_tok) # Old version
+        # env_coef_seq = np.array([self.extract_latent_rep(flow_dir,rzn).cpu().numpy()])
+        # env_coef_seq = self.extract_latent_rep(flow_dir,rzn)
+        # nT, dim = 
+        encoder_input = torch.zeros((1,env_coef_seq.shape[-1]))
+        # TODO: normalized pos (hardcoded) has different scale than representatons
+        encoder_input[0,0:2] = torch.tensor(start_pos)/100.
+        encoder_input[0,2:4] = torch.tensor(target_pos)/100.
+        encoder_input = torch.cat([encoder_input, env_coef_seq], axis=-2)
+        # Layer normalization
+        encoder_input_mean = torch.mean(encoder_input, axis=-1).reshape(-1,1)
+        encoder_input_std = torch.std(encoder_input, axis=-1).reshape(-1,1)
+        encoder_input_std[torch.where(encoder_input_std==0)] = self.std_eps
+
+        encoder_input = encoder_input - encoder_input_mean
+        encoder_input = torch.divide(encoder_input, encoder_input_std)
+        
+        
+        padding_len = None
+        if traj_len > self.context_len:
+            # TODO: correcly write if condition
+            # sample random index to slice trajectory
+            si = random.randint(0, traj_len - self.context_len)
+
+            # states = torch.from_numpy(traj['states'][si : si + self.context_len])
+            # # NOTE: add extra padde
+            # states = torch.cat([states, torch.zeros(1,states.shape[1:])], dim=0)
+            try:
+                actions = torch.from_numpy(actions[si : si + self.context_len + 1])
+            except:
+                actions = torch.cat([actions,
+                                    torch.zeros(([1] + list(actions.shape[1:])),
+                                    dtype=actions.dtype)],
+                                    dim=0)
+            timesteps = torch.arange(start=si, end=si+self.context_len, step=1)
+
+            # # all ones since no padding
+            traj_mask = torch.zeros(self.context_len, dtype=torch.long).to(torch.bool)
+            print(f" entering if condition - should not happen for basic cases")
+            print(f"actions.shape = {actions.shape}")
+            print(f"traj_len = {traj_len}")
+            sys.exit()
+        else:
+            padding_len = self.context_len - traj_len 
+
+            # padding with zeros
+            actions = torch.from_numpy(actions)
+
+            # NOTE: paddding_len + 1 for tgt i/o offset for translation tasks
+            actions = torch.cat([actions, # shape (nactions, 1)
+                                # [padding_len+1] is seq_len axis, list(actions.shape[1:] is for everythin apart from seq_len axis
+                                torch.zeros(([padding_len+1] + list(actions.shape[1:])), #[4]+[1]=[4,1]
+                                dtype=actions.dtype)],
+                               dim=0)
+
+
+            timesteps = torch.arange(start=0, end=self.context_len, step=1)
+
+            traj_mask = torch.cat([torch.zeros(traj_len, dtype=torch.long),
+                                   torch.ones(padding_len, dtype=torch.long)],
+                                  dim=0).type(torch.bool)
+        
+        target_state = torch.tensor(target_pos)
+
+
+        return  timesteps, actions, traj_mask, target_state, encoder_input, traj_len, idx, flow_dir, rzn
 
 """
 https://pytorch.org/tutorials/beginner/translation_transformer.html
@@ -902,13 +998,23 @@ def compare_trajectories(tr_op_traj_dict_list,
     if log_wandb:
         wandb.log({"Compare"+wandb_suffix: wandb.Image(fname)})
 
+def setup_env(flow_dir):
+    flow_specific_cfg = read_cfg_file(cfg_name=join(flow_dir,"cfg_used_in_proc_data.yml"))
+    env_name = flow_specific_cfg["env_name"]
+    params2 = read_cfg_file(cfg_name=join(flow_dir,"params.yml"))
+    env = gym.make(env_name)
+    env.setup(flow_specific_cfg, params2, add_trans_noise=False)
+    return env
+
 
 def simulate_tgt_actions(traj_dataset,
                            env=None,
+                           gathered_envs = False,
                            log_wandb=True,
                            wandb_fname='simulate_tgt_actions',
                            plot_flow=True,
-                           at_time=119
+                           at_time=119,
+                           plot_range=100
                            ):
     
     path = join(ROOT, "tmp/last_exp_figs/")
@@ -924,9 +1030,11 @@ def simulate_tgt_actions(traj_dataset,
     action_list = [item[2] for item in traj_dataset.dataset]
     rzn_list = [item[-1] for item in traj_dataset.dataset]
     flow_dir_list = [item[-2] for item in traj_dataset.dataset]
-    for i in range(int(0.1*len(traj_dataset))):
+    for i in range(plot_range):
         rzn = rzn_list[i]
         flow_dir = flow_dir_list[i]
+        if gathered_envs:
+            env = setup_env(flow_dir)
         env.set_rzn(rzn)
         env.reset()
         actions =  action_list[i]

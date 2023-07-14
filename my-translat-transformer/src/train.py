@@ -9,9 +9,9 @@ import torch.nn as nn
 
 from timeit import default_timer as timer
 
-from src_utils import create_action_dataset_v2, create_action_dataset_v3, compare_trajectories, viz_op_traj_with_attention
+from src_utils import create_action_dataset_v4, compare_trajectories, viz_op_traj_with_attention
 from src_utils import get_data_split, create_mask, denormalize, visualize_output, visualize_input
-from src_utils import see_steplr_trend, simulate_tgt_actions, plot_attention_weights
+from src_utils import see_steplr_trend, simulate_tgt_actions, plot_attention_weights, setup_env
 from utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object
 from custom_models import mySeq2SeqTransformer_v1
 from train_mae import MAE, ViT, Transformer, PreNorm, FeedForward, Attention
@@ -44,13 +44,7 @@ wandb.login()
 #                         }
 
 
-def setup_env(flow_dir):
-    flow_specific_cfg = read_cfg_file(cfg_name=join(flow_dir,"cfg_used_in_proc_data.yml"))
-    env_name = flow_specific_cfg["env_name"]
-    params2 = read_cfg_file(cfg_name=join(flow_dir,"params.yml"))
-    env = gym.make(env_name)
-    env.setup(flow_specific_cfg, params2, add_trans_noise=False)
-    return env
+
 
 def extract_attention_scores(model):
     enc_sa_arr = np.array([layer.enc_avg_att_scores.cpu().detach().numpy() for layer in model.transformer.encoder.layers])
@@ -212,22 +206,24 @@ def evaluate(model, val_dataloader, cfg, log_interval=10):
     return avg_loss, all_att_mats
 
 # TODO: remove test_idx and tr_set_stats from args later for cleanup
-def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, cfg, earlybreak=10**8):
+def translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg, earlybreak=10**8):
     model.eval()
     count = 0           # keeps count of total episodes
     success_count = 0   # keeps count of successful episodes
     success_count_ = 0
     op_traj_dict_list = []
+    test_dataloader = DataLoader(test_set, batch_size=1, shuffle=False)
+
     with torch.no_grad():
         # for sample in range(len(test_set)):
         # timesteps, tgt, traj_mask, target_state, env_coef_seq, traj_len, idx = test_set[sample]
         for timesteps, tgt, traj_mask, target_state, env_coef_seq, traj_len, idx, flow_dir, rzn in test_dataloader:
             if idx%100==0:
-                print(idx)
+                print("in translate, idx=", idx)
             # set up environment
-            flow_dir = flow_dir[0]
-
-            env = setup_env(flow_dir)
+            # flow_dir = flow_dir[0]  # TODO: Verify (Shubham)
+            
+            env = setup_env(flow_dir[0])
             # ENV_ = setup_env(flow_dir) # to test txy predictions from action labels
 
             op_traj_dict = {}
@@ -237,7 +233,7 @@ def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, c
             env.reset()
             # ENV_.reset()
 
-            idx = idx[0].item() #initially idx = tensor([0])
+            # idx = idx[0].item() #initially idx = tensor([0]) # TODO: Verify (Shubham)
             # rzn = test_idx[idx]
             env.set_rzn(rzn)
             # ENV_.set_rzn(rzn)
@@ -284,23 +280,7 @@ def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, c
                         success_count += 1
                     break
             
-            # # to test txy predictions from action labels
-            # for k in range(cfg.context_len):
-            #     # memory = memory.to(cfg.device)
-            #     # out = model.decode(PREDS_, memory, tgt_mask, timesteps)
-            #     # gen = model.generator(out)
-            #     # PREDS_[0,k+1,:] = tgt[0,k,:].detach()
-            #     # a = PREDS_[0,k+1,:].cpu().numpy().copy()
-            #     a = tgt[0,k,0].cpu().numpy().copy()
-            #     a = a*2*np.pi
-            #     txy, reward ,done, info = ENV_.step(a)
-            #     TXY_PREDS_[0,k+1,:] = txy 
-            #     # TODO: ***IMP*****: reduce GPU-CPU communication
-            #     if done:
-            #         if reward > 0:
-            #             reached_target_ = True
-            #             success_count_ += 1
-            #         break
+         
             k = 0
             # loss = loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
             mse = F.mse_loss(preds[0,:i].cpu(),tgt[0,:i].cpu())
@@ -410,7 +390,7 @@ def train_model(args=None, cfg_name=None):
 
     prefix = "my_translat_" + dataset_name
 
-    save_model_name =  prefix + "_model_" + start_time_str + ".pt"
+    save_model_name = prefix + "_model_" + start_time_str + ".pt"
     save_model_path = join(log_dir, save_model_name)
 
 
@@ -426,9 +406,6 @@ def train_model(args=None, cfg_name=None):
     # env.setup(cfg, params2, add_trans_noise=add_trans_noise)
     
     mae = torch.load(mae_model_name)
-    # Note_to_Rohit : Using two GPUs for mae inference. Not sure if this is the correct way to do it as GPU 0 is still running out of memory. 
-    # mae = nn.DataParallel(mae, device_ids=[0,1]).to(device)
-    # print(mae)
     
     # Load and Split dataset
     with open(dataset_path, 'rb') as f:
@@ -444,10 +421,10 @@ def train_model(args=None, cfg_name=None):
     # print(train_traj_set)
     # print(train_idx_set)
 
-    torch.multiprocessing.set_start_method('spawn')
+    # torch.multiprocessing.set_start_method('spawn')
     
     # dataset contains optimal actions for different realizations of the env
-    tr_set = create_action_dataset_v3(dataset=train_traj_set, 
+    tr_set = create_action_dataset_v4(dataset=train_traj_set, 
                             #train_idx_set,
                             idx_set=train_idx_set,
                             context_len=context_len,
@@ -457,13 +434,13 @@ def train_model(args=None, cfg_name=None):
     # src_stats = tr_set.get_src_stats()
     # src_stats_path = save_model_path[:-3] +"_src_stats.npy"
     # np.save(src_stats_path, src_stats)
-    val_set = create_action_dataset_v3(val_traj_set, 
+    val_set = create_action_dataset_v4(val_traj_set, 
                             val_idx_set,
                             context_len,
                             mae,
                             
                                         )
-    test_set = create_action_dataset_v3(test_traj_set, 
+    test_set = create_action_dataset_v4(test_traj_set, 
                             val_idx_set,
                             context_len,
                             mae, 
@@ -471,23 +448,24 @@ def train_model(args=None, cfg_name=None):
                                         )
     
     train_dataloader = DataLoader(tr_set, batch_size=cfg.batch_size, shuffle=True,
-                                  num_workers=10, pin_memory=True)
-    bs = cfg.batch_size*10 # RODO: remember why we did this?
+                                #   num_workers=10, pin_memory=True
+                                  )
+    bs = cfg.batch_size # RODO: remember why we did this?
     val_dataloader = DataLoader(val_set, batch_size=bs, shuffle=True)
-    test_dataloader = DataLoader(test_set, batch_size=1, shuffle=False)
-    from time import time
-    import multiprocessing as mp
-    for num_workers in range(2, mp.cpu_count(), 4):  
-        print(f"Num workers:{num_workers}")
-        train_loader = DataLoader(tr_set,shuffle=True,num_workers=num_workers,batch_size=32,pin_memory=True)
-        start = time()
-        for epoch in range(1):
-            for i, data in enumerate(train_loader, 0):
-                pass
-        end = time()
-        with open(join("/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/src", f"num-workers.txt"), 'a') as f:
-            f.write("Finish with:{} second, num_workers={}".format(end - start, num_workers))
-    #     print("Finish with:{} second, num_workers={}".format(end - start, num_workers))
+    # test_dataloader = DataLoader(test_set, batch_size=1, shuffle=False)
+    # from time import time
+    # import multiprocessing as mp
+    # for num_workers in range(2, mp.cpu_count(), 4):  
+    #     print(f"Num workers:{num_workers}")
+    #     train_loader = DataLoader(tr_set,shuffle=True,num_workers=num_workers,batch_size=32,pin_memory=True)
+    #     start = time()
+    #     for epoch in range(1):
+    #         for i, data in enumerate(train_loader, 0):
+    #             pass
+    #     end = time()
+    #     with open(join("/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/src", f"num-workers.txt"), 'a') as f:
+    #         f.write("Finish with:{} second, num_workers={}".format(end - start, num_workers))
+    # #     print("Finish with:{} second, num_workers={}".format(end - start, num_workers))
 
     
     # visualize_input(val_set, stats=None, log_wandb=True, at_time=119, info_str='val', color_by_time=False)
@@ -501,13 +479,15 @@ def train_model(args=None, cfg_name=None):
     # intantiate gym env for vizualization purposes
     env_4_viz = setup_env(dummy_flow_dir)
 
-    # visualize_input(tr_set, log_wandb=True, at_time=119, env=env_4_viz)
-    # simulate_tgt_actions(tr_set,
-    #                         env=env_4_viz,
-    #                         log_wandb=True,
-    #                         wandb_fname='simulate_tgt_actions',
-    #                         plot_flow=True,
-    #                         at_time=119)
+    visualize_input(tr_set, log_wandb=True, at_time=119, env=env_4_viz, traj_idx=[k for k in range(200)])
+    simulate_tgt_actions(tr_set,
+                            env=env_4_viz,
+                            gathered_envs=True,
+                            log_wandb=True,
+                            wandb_fname='simulate_tgt_actions',
+                            plot_flow=True,
+                            at_time=119,
+                            plot_range=200)
 
     
     transformer = mySeq2SeqTransformer_v1(num_encoder_layers, num_decoder_layers, embed_dim,
@@ -568,7 +548,7 @@ def train_model(args=None, cfg_name=None):
         train_loss, tr_all_att_mat = train_epoch(transformer, optimizer, train_dataloader, cfg, args, scheduler=scheduler)
         epoch_end_time = timer()
         print("evaluating")
-        val_loss, val_all_att_mat = evaluate(transformer, val_set, cfg)
+        val_loss, val_all_att_mat = evaluate(transformer, val_dataloader, cfg)
         scheduler.step()
         wandb.log({f"in_eval/lr":  scheduler.get_last_lr()[0]
                        })
@@ -634,7 +614,7 @@ def train_model(args=None, cfg_name=None):
                                 model_name="GenHW"+"_on_"+dataset_name
                                 )  
                         
-            val_op_traj_dict_list, val_results = translate(transformer, val_idx_set, val_set, None, 
+            val_op_traj_dict_list, val_results = translate(transformer, val_idx_set, tr_set, None, 
                                                            cfg, earlybreak=tt_eb[1])
             val_set_txy_preds = [d['states'] for d in val_op_traj_dict_list]
             path_lens = [d['n_tsteps'] for d in val_op_traj_dict_list]

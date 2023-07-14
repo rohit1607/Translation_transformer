@@ -15,11 +15,11 @@ add_transition_noise_during_inf: False
 noise_var: [0.1,0]
 
 dataset_name: "GenHW"
-dataset_path: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/GenHW/Gathered_datasets/gathered_4.pkl"
+dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GenHW_all/Gathered_datasets/gathered_5_50/gathered_rep_5_best_timm_maeModel_17D_500E.pkl"
 log_dir: "log"
 params2_name: "data/DOLS_Cylinder/params.yml"
 
-mae_model_name: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/saved_mae_models/mae_trial_100.pt"
+mae_model_name: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/saved_mae_models/best_timm_maeModel_17D_500E.pt"
 
 random_split: True
 split_tr_tst_val: [0.6, 0.2, 0.2]
@@ -31,26 +31,26 @@ translate_earlybreaks: [50, 200, 500]
 
 max_eval_ep_len: 120
 num_eval_ep: 200
-eval_inerval: 3
+eval_inerval: 20
 batch_size: 32
 
 optimizer_name: 'AdamW'
-lr: 0.001
+lr: 0.0005
 final_lr: 0.000001
 use_scheduler: True
 wt_decay: 0.001
 warmup_steps: 10000
-num_epochs: 20
+num_epochs: 500
 num_updates_per_iter: 500
 add_target_loss: False
 a_tl: 1000
 
 target_conditioning: False 
-num_encoder_layers: 2
-num_decoder_layers: 2
-context_len: 120
-embed_dim: 16
-n_heads: 4
+num_encoder_layers: 4
+num_decoder_layers: 4
+context_len: 121
+embed_dim: 32
+n_heads: 8
 dropout_p: 0.1
 
 device: 'cuda'
