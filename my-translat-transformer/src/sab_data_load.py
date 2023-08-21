@@ -11,31 +11,26 @@ from cfg.config import config
 
 
 def load_vel(data_path, scl=config["scl"], nt=config["nt"], nr=config["nr"]):
-    all_u_mat = np.load(data_path +'all_u_mat.npy')*scl
+    all_u_mat = np.load(data_path +'all_u_mat.npy')
     
     tts = all_u_mat.shape[0]  # total time steps
     a = int(config["frac_1"]*(tts/config["kf"]))
     b = int(config["frac_2"]*(tts/config["kf"]))
     gt = int((b-a)/nt)  # gaps for time steps slicing
     
-    all_u_mat = all_u_mat[slice(a, b, gt)]
-    all_ui_mat = (np.load(data_path +'all_ui_mat.npy')*scl)[slice(a, b, gt)]
-    all_v_mat = (np.load(data_path +'all_v_mat.npy')*scl)[slice(a, b, gt)]
-    all_vi_mat = (np.load(data_path +'all_vi_mat.npy')*scl)[slice(a, b, gt)]
+    all_u_mat = all_u_mat[a:b:gt]
+    all_ui_mat = (np.load(data_path +'all_ui_mat.npy'))[a:b:gt]
+    all_v_mat = (np.load(data_path +'all_v_mat.npy'))[a:b:gt]
+    all_vi_mat = (np.load(data_path +'all_vi_mat.npy'))[a:b:gt]
     
-    all_Yi = np.load(data_path +'all_Yi.npy')*scl
+    all_Yi = np.load(data_path +'all_Yi.npy')
     
     trzn = all_Yi.shape[1]  # total realizations
     gr = int(trzn/nr)  # gaps for rzn steps slicing
+
+    all_Yi = all_Yi[a:b:gt, :trzn:gr] 
     
-    all_Yi = all_Yi[slice(a, b, gt)]
-    ALL_Yi = []
-    for i in range(all_Yi.shape[0]):
-        x = all_Yi[i][slice(0, trzn, gr)]
-        ALL_Yi.append(x)
-    ALL_Yi = np.array(ALL_Yi)    
-    
-    vel_field_data = [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, ALL_Yi]
+    vel_field_data = [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
     return vel_field_data
 
 
@@ -102,16 +97,17 @@ def plot_vel_field(vx_grid, vy_grid, g_strmplot_lw=1, g_strmplot_arrowsize=1, fl
     return im  
     
     
-def GiveMe_loaders(*args, val_size=0.1, batch_size=16, path=""):
+def GiveMe_loaders(*args, val_size=0.1, batch_size=16, path="", plot_dat=True):
     N= len(args)
     data_sets= []
     
     for i in range(N):
         vel_field_data_i = load_vel(args[i])
-        print(f"{vel_field_data_i[0].shape}       {vel_field_data_i[1].shape}        {vel_field_data_i[2].shape}         {vel_field_data_i[3].shape}          {vel_field_data_i[4].shape}")
+        #print(f"{vel_field_data_i[0].shape}       {vel_field_data_i[1].shape}        {vel_field_data_i[2].shape}         {vel_field_data_i[3].shape}          {vel_field_data_i[4].shape}")
         dataset_i = VelocityDataset(vel_field_data_i)
         data_sets.append(dataset_i)
-        plot_vel_field(dataset_i.__getitem__(0)[0], dataset_i.__getitem__(0)[1], flow_name="loader_flow_"+str(i), path=path)
+        if plot_dat:
+            plot_vel_field(dataset_i.__getitem__(0)[0], dataset_i.__getitem__(0)[1], flow_name="loader_flow_"+str(i), path=path)
         
     dataset = ConcatDataset(data_sets)
     Len= len(dataset)

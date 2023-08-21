@@ -9,11 +9,12 @@ import torch.nn as nn
 
 from timeit import default_timer as timer
 
-from src_utils import create_action_dataset_v4, compare_trajectories, viz_op_traj_with_attention
+from src_utils import create_action_dataset_v5, compare_trajectories, viz_op_traj_with_attention
 from src_utils import get_data_split, create_mask, denormalize, visualize_output, visualize_input
 from src_utils import see_steplr_trend, simulate_tgt_actions, plot_attention_weights, setup_env
-from utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object
-from custom_models import mySeq2SeqTransformer_v1
+from src_utils import convert_angle_to_vectors
+from utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object, show_num_of_params
+from custom_models import e2e_Seq2SeqTransformer_v1
 from train_mae import MAE, ViT, Transformer, PreNorm, FeedForward, Attention
 
 import gym
@@ -27,6 +28,7 @@ import argparse
 from os.path import join
 from datetime import datetime
 import numpy as np
+import random
 from root_path import ROOT
 
 from transformers import get_cosine_with_hard_restarts_schedule_with_warmup
@@ -34,10 +36,22 @@ from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 from paper_plots import paper_plots
 
+# # for multi-GPU
+# import torch.multiprocessing as mp
+# from torch.utils.data.distributed import DistributedSampler
+# from torch.nn.parallel import DistributedDataParallel as DDP
+# from torch.distributed import init_process_group, destroy_process_group
+
+
 
 
 wandb.login()
 
+# def ddp_setup(rank, world_size):
+#     os.environ["MASTER_ADDR"]="localhost"
+#     os.environ["MASTER_PORT"]="12355"
+#     init_process_group(backend='nccl', rank=rank, world_size=world_size)
+    
 # DATASET_CREATION_MAP = {"DOLS": create_action_dataset_v2,
 #                         # "GenHW": create_action_dataset_v3,
 #                         # "GPT_dset": verify TODO
@@ -100,17 +114,17 @@ def train_epoch(model, optimizer, train_dataloader, cfg, args, scheduler=None, l
 
     loss = 0
     count=  0
-    # for env_coef_seq, tgt in train_dataloader:
-    for timesteps, tgt, traj_mask, target_state, env_coef_seq, traj_len, idx, _, _ in train_dataloader:
+    # for vel_fld_seq, tgt in train_dataloader:
+    for timesteps, tgt, traj_mask, loc_tensor, vel_fld_seq, traj_len, idx, _, _ in train_dataloader:
         timesteps = timesteps.to(cfg.device)
-        src = env_coef_seq.to(cfg.device)
+        src = vel_fld_seq[:,0:cfg.context_len - 1].to(cfg.device)
         tgt = tgt.to(cfg.device)
-
+        loc_tensor = loc_tensor.to(cfg.device)
         tgt_input = tgt[:, :-1, :]
         tgt_padding_mask = traj_mask.to(cfg.device)
-        src_mask, tgt_mask, src_padding_mask, _ = create_mask(src, tgt_input, traj_len, cfg.device)
+        src_mask, tgt_mask, src_padding_mask, _ = create_mask(src, tgt_input, traj_len, cfg.device, extra_tokens=1)
 
-        logits = model(src, tgt_input, src_mask, tgt_mask, src_padding_mask, tgt_padding_mask, src_padding_mask, timesteps)
+        logits = model(src, loc_tensor, tgt_input, src_mask, tgt_mask, src_padding_mask, tgt_padding_mask, src_padding_mask, timesteps)
 
         tgt_out = tgt[:, 1:, :]
         mask_for_loss = torch.clone(tgt_padding_mask).to(cfg.device)
@@ -131,12 +145,18 @@ def train_epoch(model, optimizer, train_dataloader, cfg, args, scheduler=None, l
         # loss = loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
         
         # TODO: restrict output to 0-6 or 0-1 if scaled 
-        loss = F.mse_loss(logits, tgt_out)
+        if cfg.loss_type == 'mse_over_angle':
+            loss = F.mse_loss(logits, tgt_out)
+        elif cfg.loss_type == 'mean_norm_of_vec_diff':
+            logits_vec2d = convert_angle_to_vectors(logits, device=cfg.device)
+            tgt_out_vec2d = convert_angle_to_vectors(tgt_out, device=cfg.device)
+            loss = torch.mean(torch.linalg.norm(logits_vec2d - tgt_out_vec2d,axis=1))
+        
         optimizer.zero_grad()
 
         loss.backward()
         # TODO: try 10
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 4)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
 
         optimizer.step()
         # if not scheduler == None:
@@ -145,7 +165,7 @@ def train_epoch(model, optimizer, train_dataloader, cfg, args, scheduler=None, l
         avg_loss = avg_loss + ((loss.item() - avg_loss)/(count+1))
 
         if count%log_interval == 0:
-            param_norms = [p.grad.data.norm(2).item() for p in model.parameters()]
+            param_norms = [p.grad.data.norm(2).item() for p in model.parameters() if not p.grad == None]
             mean_norm = np.mean(param_norms)
             min_norm = np.min(param_norms)
             max_norm = np.max(param_norms)
@@ -167,15 +187,16 @@ def evaluate(model, val_dataloader, cfg, log_interval=10):
 
 
     count=  0
-    for timesteps, tgt, traj_mask, target_state, env_coef_seq, traj_len, idx, _, _ in val_dataloader:
+    for timesteps, tgt, traj_mask, loc_tensor, vel_fld_seq, traj_len, idx, _, _ in val_dataloader:
         timesteps = timesteps.to(cfg.device)
-        src = env_coef_seq.to(cfg.device)
+        src = vel_fld_seq[:,0:cfg.context_len - 1].to(cfg.device)
         tgt = tgt.to(cfg.device)
         tgt_input = tgt[:, :-1, :]
         tgt_padding_mask = traj_mask.to(cfg.device)
-        src_mask, tgt_mask, src_padding_mask, _ = create_mask(src, tgt_input, traj_len, cfg.device)
+        src_mask, tgt_mask, src_padding_mask, _ = create_mask(src, tgt_input, traj_len, cfg.device, extra_tokens=1)
+        loc_tensor = loc_tensor.to(cfg.device)
 
-        logits = model(src, tgt_input, src_mask, tgt_mask, src_padding_mask, tgt_padding_mask, src_padding_mask,timesteps)
+        logits = model(src, loc_tensor, tgt_input, src_mask, tgt_mask, src_padding_mask, tgt_padding_mask, src_padding_mask, timesteps)
         
         tgt_out = tgt[:, 1:, :]
         mask_for_loss = torch.clone(tgt_padding_mask).to(cfg.device)
@@ -194,7 +215,12 @@ def evaluate(model, val_dataloader, cfg, log_interval=10):
         # logits =  logits.view(-1,1)[(~tgt_padding_mask).view(-1,)]
         # tgt_out = tgt_out.reshape(-1,1)[(~tgt_padding_mask).view(-1,)]
         # loss = loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
-        loss = F.mse_loss(logits, tgt_out)
+        if cfg.loss_type == 'mse_over_angle':
+            loss = F.mse_loss(logits, tgt_out)
+        elif cfg.loss_type == 'mean_norm_of_vec_diff':
+            logits_vec2d = convert_angle_to_vectors(logits, device=cfg.device)
+            tgt_out_vec2d = convert_angle_to_vectors(tgt_out, device=cfg.device)
+            loss = torch.mean(torch.linalg.norm(logits_vec2d - tgt_out_vec2d,axis=1))
         
         # losses += loss.item()
         avg_loss = avg_loss + ((loss.item() - avg_loss)/(count+1))
@@ -216,49 +242,44 @@ def translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg, ear
 
     with torch.no_grad():
         # for sample in range(len(test_set)):
-        # timesteps, tgt, traj_mask, target_state, env_coef_seq, traj_len, idx = test_set[sample]
-        for timesteps, tgt, traj_mask, target_state, env_coef_seq, traj_len, idx, flow_dir, rzn in test_dataloader:
+        for timesteps, tgt, traj_mask, loc_tensor, vel_fld_seq, traj_len, idx, flow_dir, rzn in test_dataloader:
             if idx%100==0:
                 print("in translate, idx=", idx)
             # set up environment
             # flow_dir = flow_dir[0]  # TODO: Verify (Shubham)
             
             env = setup_env(flow_dir[0])
-            # ENV_ = setup_env(flow_dir) # to test txy predictions from action labels
 
             op_traj_dict = {}
             reached_target = False
             reached_target_ = False
 
             env.reset()
-            # ENV_.reset()
 
             # idx = idx[0].item() #initially idx = tensor([0]) # TODO: Verify (Shubham)
             # rzn = test_idx[idx]
             env.set_rzn(rzn)
-            # ENV_.set_rzn(rzn)
 
             timesteps = timesteps.to(cfg.device)
             count += 1
             if count == earlybreak:
                 break
-            src = env_coef_seq.to(cfg.device)
+            src = src = vel_fld_seq[:,0:cfg.context_len - 1].to(cfg.device) #vel_fld_seq.to(cfg.device) 
             dummy_tgt_for_mask = tgt.to(cfg.device)[:, :-1, :]
-            src_mask, tgt_mask, src_padding_mask, _ = create_mask(src, dummy_tgt_for_mask, traj_len, cfg.device)
+            loc_tensor = loc_tensor.to(cfg.device)
+
+            src_mask, tgt_mask, src_padding_mask, _ = create_mask(src, dummy_tgt_for_mask, traj_len, cfg.device, extra_tokens=1)
             # memory is the encoder output
-            memory =  model.encode(src, src_mask, timesteps)
+            memory =  model.encode(src, loc_tensor, src_mask, timesteps)
 
             preds = torch.zeros((1, cfg.context_len, dummy_tgt_for_mask.shape[2]),dtype=torch.float32, device=cfg.device)
-            PREDS_ = torch.zeros((1, cfg.context_len, dummy_tgt_for_mask.shape[2]),dtype=torch.float32, device=cfg.device)
+            # PREDS_ = torch.zeros((1, cfg.context_len, dummy_tgt_for_mask.shape[2]),dtype=torch.float32, device=cfg.device)
             
             txy_preds = np.zeros((1, cfg.context_len+1, 3),dtype=np.float32,)
-            # TXY_PREDS_ =  np.zeros((1, cfg.context_len+1, 3),dtype=np.float32,)
-            # print(f" preds.shape = {preds.shape}, tgt.shape = {tgt.shape}")
+
             txy_preds[0,0,:] = np.array([0,env.start_pos[0],env.start_pos[1]])
-            # TXY_PREDS_[0,0,:] = np.array([0,ENV_.start_pos[0],ENV_.start_pos[1]])
-            # TODO: Change. Put in SOS token
+
             preds[0,0,:] = tgt[0,0,:]
-            # PREDS_[0,0,:] = tgt[0,0,:]
             a = preds[0,0,:].cpu().numpy().copy()
             a = a*2*np.pi
             txy, reward ,done, info = env.step(a)
@@ -287,7 +308,7 @@ def translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg, ear
             # print(f"rough mse for sample {count} = {mse}")
 
             op_traj_dict['states'] = np.array(txy_preds)
-            op_traj_dict['actions'] = preds #reds.cpu()*2*np.pi
+            op_traj_dict['actions'] = preds.cpu()*2*np.pi
             op_traj_dict['t_done'] = i+3
             op_traj_dict['n_tsteps'] = i+2
             # op_traj_dict['attention_weights'] = attention_weights
@@ -331,13 +352,12 @@ def train_model(args=None, cfg_name=None):
     wandb_exp_name = "env2a_" + dataset_name + "__" + start_time_str
     wandb.init(project="translation-transformer",
         name = wandb_exp_name,
-        config=config
+        config=config,
         )
 
     cfg=wandb.config
     # cfg_copy = cfg
 
-    # params2 = read_cfg_file(cfg_name=join(ROOT,cfg.params2_name))
 
     add_trans_noise = cfg.add_transition_noise_during_inf
 
@@ -366,6 +386,7 @@ def train_model(args=None, cfg_name=None):
     num_encoder_layers = cfg.num_encoder_layers
     num_decoder_layers = cfg.num_decoder_layers
     context_len = cfg.context_len     # K in decision transformer
+    req_context_len = cfg.req_context_len 
     embed_dim = cfg.embed_dim          # embedding (hidden) dim of transformer
     n_heads = cfg.n_heads            # num of transformer heads
     dropout_p = cfg.dropout_p         # dropout probability
@@ -380,8 +401,21 @@ def train_model(args=None, cfg_name=None):
     mae_model_name = cfg.mae_model_name
     # training and evaluation device
     device = torch.device(cfg.device)
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
 
+    pp_cfg = {}
+    if cfg.preprocessor == 'ViT_scratch':
+        pp_cfg['hidden_size'] = cfg.embed_dim #hidden size of vit should be same as emb_dim
+        pp_cfg['num_hidden_layers'] = cfg.num_hidden_layers_vit
+        pp_cfg['num_attention_heads'] = cfg.num_attention_heads_vit
+        pp_cfg['intermediate_size'] = cfg.intermediate_size_vit
+        pp_cfg['image_size'] = cfg.image_size_vit
+        pp_cfg['patch_size'] = cfg.patch_size_vit
+        pp_cfg['num_channels'] = cfg.num_channels_vit
+        pp_cfg['hidden_dropout_prob'] = cfg.hidden_dropout_prob_vit
+        pp_cfg['attention_probs_dropout_prob'] = cfg.attention_probs_dropout_prob_vit
+
+        
     if ARGS_QR:
         print("\n ---------- Modifying cfg params for quick run --------------- \n")
         num_epochs = 2
@@ -411,39 +445,46 @@ def train_model(args=None, cfg_name=None):
     with open(dataset_path, 'rb') as f:
         traj_dataset = pickle.load(f)
 
-    idx_split, set_split = get_data_split(traj_dataset,
+    # traj_dataset =  traj_dataset[0:500]
+    traj_dataset_new = []
+    for i in range(len(traj_dataset)):
+        a, b = traj_dataset[i][2].shape
+        if  a < req_context_len:
+            traj_dataset_new.append(traj_dataset[i])
+    
+    traj_dataset_new =  traj_dataset_new[0:30000]   
+    context_len = np.max([(traj_dataset_new[i][2]).shape for i in range(len(traj_dataset_new))]) + 15 
+    # wandb.config.update(cfg, allow_val_change=True)
+    # cfg['context_len'] = context_len  
+
+    
+
+    idx_split, set_split = get_data_split(traj_dataset_new,
                                         split_ratio=split_tr_tst_val, 
                                         random_seed=split_ran_seed, 
                                         random_split=random_split)
     train_traj_set, test_traj_set, val_traj_set = set_split
     train_idx_set, test_idx_set, val_idx_set = idx_split
 
-    # print(train_traj_set)
-    # print(train_idx_set)
 
-    # torch.multiprocessing.set_start_method('spawn')
-    
     # dataset contains optimal actions for different realizations of the env
-    tr_set = create_action_dataset_v4(dataset=train_traj_set, 
+    tr_set = create_action_dataset_v5(dataset=train_traj_set, 
                             #train_idx_set,
                             idx_set=train_idx_set,
                             context_len=context_len,
-                            mae=mae, 
                                         )
-    print("8888888888888888888888888888888")
+    
     # src_stats = tr_set.get_src_stats()
     # src_stats_path = save_model_path[:-3] +"_src_stats.npy"
     # np.save(src_stats_path, src_stats)
-    val_set = create_action_dataset_v4(val_traj_set, 
+    val_set = create_action_dataset_v5(val_traj_set, 
                             val_idx_set,
                             context_len,
-                            mae,
                             
                                         )
-    test_set = create_action_dataset_v4(test_traj_set, 
+    test_set = create_action_dataset_v5(test_traj_set, 
                             val_idx_set,
                             context_len,
-                            mae, 
                             
                                         )
     
@@ -452,51 +493,44 @@ def train_model(args=None, cfg_name=None):
                                   )
     bs = cfg.batch_size # RODO: remember why we did this?
     val_dataloader = DataLoader(val_set, batch_size=bs, shuffle=True)
-    # test_dataloader = DataLoader(test_set, batch_size=1, shuffle=False)
-    # from time import time
-    # import multiprocessing as mp
-    # for num_workers in range(2, mp.cpu_count(), 4):  
-    #     print(f"Num workers:{num_workers}")
-    #     train_loader = DataLoader(tr_set,shuffle=True,num_workers=num_workers,batch_size=32,pin_memory=True)
-    #     start = time()
-    #     for epoch in range(1):
-    #         for i, data in enumerate(train_loader, 0):
-    #             pass
-    #     end = time()
-    #     with open(join("/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/src", f"num-workers.txt"), 'a') as f:
-    #         f.write("Finish with:{} second, num_workers={}".format(end - start, num_workers))
-    # #     print("Finish with:{} second, num_workers={}".format(end - start, num_workers))
 
-    
     # visualize_input(val_set, stats=None, log_wandb=True, at_time=119, info_str='val', color_by_time=False)
     # visualize_input(test_set, stats=None, log_wandb=True, at_time=119, info_str='test', color_by_time=False)
 
-    _, dummy_target, _, _, dummy_env_coef_seq, _,_,dummy_flow_dir,_ = tr_set[0]
-    src_vec_dim = dummy_env_coef_seq.shape[-1] 
+    _, dummy_target, _, _, dummy_vel_fld_seq, _,_,dummy_flow_dir,_ = tr_set[0]
+    # src_vec_dim = dummy_vel_fld_seq.shape[-1] 
+    # src_vec_dim = 128 # TODO: change as per mae ouput,  768,384
     tgt_vec_dim = dummy_target.shape[-1]
-    print(dummy_env_coef_seq.shape)
-    print(f"src_vec_dim = {src_vec_dim} \n tgt_vec_dim = {tgt_vec_dim}")
+    # print(dummy_vel_fld_seq.shape)
+    # print(f"src_vec_dim = {src_vec_dim} \n tgt_vec_dim = {tgt_vec_dim}")
     # intantiate gym env for vizualization purposes
     env_4_viz = setup_env(dummy_flow_dir)
 
     visualize_input(tr_set, log_wandb=True, at_time=119, env=env_4_viz, traj_idx=[k for k in range(200)])
-    simulate_tgt_actions(tr_set,
-                            env=env_4_viz,
-                            gathered_envs=True,
-                            log_wandb=True,
-                            wandb_fname='simulate_tgt_actions',
-                            plot_flow=True,
-                            at_time=119,
-                            plot_range=200)
+    # simulate_tgt_actions(tr_set,
+    #                         env=env_4_viz,
+    #                         gathered_envs=True,
+    #                         log_wandb=True,
+    #                         wandb_fname='simulate_tgt_actions',
+    #                         plot_flow=True,
+    #                         at_time=119,
+    #                         plot_range=100)
 
     
-    transformer = mySeq2SeqTransformer_v1(num_encoder_layers, num_decoder_layers, embed_dim,
-                                 n_heads, src_vec_dim, tgt_vec_dim, 
+    transformer = e2e_Seq2SeqTransformer_v1(num_encoder_layers, num_decoder_layers, embed_dim,
+                                 n_heads, 
+                                 embed_dim, #src_vec_dim=embed_dim
+                                 tgt_vec_dim, 
+                                 preprocessor=cfg.preprocessor,
+                                 preprocessor_cfg=pp_cfg,
+                                 device=cfg.device,
                                  dim_feedforward=None,     # TODO: add dim_ffn to cfg
                                  max_len=context_len,
-                                 positional_encoding="simple"
+                                 positional_encoding=cfg.pos_encoding_type,
+                                 pixel_scale=10,
                                  ).to(cfg.device)
     
+    # transformer = DDP(transformer, device_ids=)
  
     
     if optimizer_name == 'AdamW':
@@ -534,6 +568,12 @@ def train_model(args=None, cfg_name=None):
     print(f"trainable params = {pytorch_trainable_params}")
     wandb.run.summary["total params"] = pytorch_total_params
     wandb.run.summary["trainable params"] = pytorch_trainable_params
+    
+    transformer_params = show_num_of_params(transformer.transformer, model_name="transformer")
+    vit_params = show_num_of_params(transformer.vit, model_name="vit")
+    wandb.run.summary["total trainable transformer params"] = transformer_params
+    wandb.run.summary["total trainable vit params"] = vit_params
+    
 
 
 
@@ -555,9 +595,9 @@ def train_model(args=None, cfg_name=None):
         
         # Evaluation by translation   
         if epoch % eval_inerval == 0:
-            print("plotting attention")
-            plot_all_attention_mats(tr_all_att_mat)
-            plot_all_attention_mats(val_all_att_mat)
+            # print("plotting attention")
+            # plot_all_attention_mats(tr_all_att_mat)
+            # plot_all_attention_mats(val_all_att_mat)
             print("translating")
             tr_op_traj_dict_list, tr_results = translate(transformer, train_idx_set, tr_set, None, 
                                                    cfg, earlybreak=tt_eb[0])
@@ -724,16 +764,28 @@ class jugaad_cfg:
         self.context_len = context_len
         self.device = device
 
+# 07-26-17-21
 def load_prev_and_test(args, cfg_name):
     # load model
     # tmp_path = ROOT + "log/my_translat_GPTdset_DG3_model_04-01-03-20.pt"
-    tmp_path = ROOT + "/log/my_translat_GenHW_model_08-02-16-14.pt"
+    tmp_path = ROOT + "/log/my_translat_GenHW_model_08-17-17-11.pt"
 
     transformer = torch.load(tmp_path)
     model_name = tmp_path[:-3].split('/')[-1]
     dset = 'train'
-    dataset_path = "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GenHW_all/Gathered_datasets/gathered_12_500/gathered_12.pkl"
+    dataset_path = "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GenHW_all/Gathered_datasets/gathered_18_500_test/gathered_18.pkl"
     traj_dataset = load_pkl(dataset_path)
+    req_context_len = 36
+
+    traj_dataset_new = []
+    for i in range(len(traj_dataset)):
+        a, b = traj_dataset[i][2].shape
+        if  a < req_context_len:
+            traj_dataset_new.append(traj_dataset[i])
+    
+    # traj_dataset_new = random.sample(traj_dataset_new, 5000)   
+    context_len = np.max([(traj_dataset_new[i][2]).shape for i in range(len(traj_dataset_new))]) + 15     
+    
     dataset_name = dataset_path[:-4].split('/')[-1]
     src_stats_path = tmp_path[:-3] + "_src_stats.npy"
     src_stats_path = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_translat_DOLS_Cylinder_model_05-19-14-08_src_stats.npy"
@@ -741,24 +793,24 @@ def load_prev_and_test(args, cfg_name):
     src_stats = (src_stats[0], src_stats[1])
 
 
-    traj_dataset =  traj_dataset[0:200]
-    idx_split, set_split = get_data_split(traj_dataset,
-                                    split_ratio=[0.6, 0.2, 0.2], 
+    idx_split, set_split = get_data_split(traj_dataset_new,
+                                    split_ratio=[0.6, 0.1, 0.3], 
                                     random_seed=42,
                                     random_split=True)
     us_train_traj_set, us_test_traj_set, us_val_traj_set = set_split
     us_train_idx_set, us_test_idx_set, us_val_idx_set = idx_split
+    
     us_train_traj_set = create_action_dataset_v5(dataset=us_train_traj_set, 
                             idx_set=us_train_idx_set,
-                            context_len=121,
+                            context_len=context_len,
                                         )
     us_val_traj_set = create_action_dataset_v5(dataset=us_val_traj_set, 
                             idx_set=us_val_idx_set,
-                            context_len=121,
+                            context_len=context_len,
                                         )
     us_test_traj_set = create_action_dataset_v5(dataset=us_test_traj_set, 
                             idx_set=us_test_idx_set,
-                            context_len=121,
+                            context_len=context_len,
                                         )
     
     # src_stats = us_test_traj_set.get_src_stats()
@@ -768,9 +820,9 @@ def load_prev_and_test(args, cfg_name):
     # cfg_path =  tmp_path[:-3] + ".yml"
     # cfg =  read_cfg_file(cfg_path)
 
-    cfg = jugaad_cfg(context_len=121, device='cuda')
-    op_traj_dict_list, results = translate(transformer,us_train_idx_set, us_train_traj_set, 
-                                            None, cfg)
+    cfg = jugaad_cfg(context_len=41, device='cuda')
+    op_traj_dict_list, results = translate(transformer,us_test_idx_set, us_test_traj_set, 
+                                            None, cfg, earlybreak=200)
     os.makedirs(os.path.dirname(ROOT + f"paper_plots/{model_name}/{dataset_name}/{dset}_op_traj_dict_list.pkl"),exist_ok=True)
     os.makedirs(os.path.dirname(ROOT + f"paper_plots/{model_name}/{dataset_name}/{dset}_results.pkl"), exist_ok=True)
     save_object(op_traj_dict_list, os.path.join(ROOT, f"paper_plots/{model_name}/{dataset_name}/{dset}_op_traj_dict_list.pkl"))
@@ -808,10 +860,12 @@ def load_prev_and_test(args, cfg_name):
     pp = paper_plots(env_4_viz, op_traj_dict_list, src_stats,
                         paper_plot_info=paper_plot_info,
                         save_dir=save_dir)
-    # pp.plot_val_ip_op(us_train_traj_set, test_set_txy_preds, path_lens, success_list)
+    pp.plot_val_ip_op(us_train_traj_set, test_set_txy_preds, path_lens, success_list)
     
-    pp.plot_actions(us_train_traj_set, test_set_txy_preds, path_lens, success_list, actions)
+    # pp.plot_actions(us_train_traj_set, test_set_txy_preds, path_lens, success_list, actions)
     
+    
+    # ---
     # pp.plot_traj_by_arr(us_test_traj_set,set_str="_us_test_")
     # pp.plot_train_val_ip_op(train_traj_dataset, val_traj_dataset)
     # pp.plot_traj_by_arr(val_traj_dataset, set_str="_val")
@@ -890,8 +944,7 @@ NAME_MAP = {
             "v5": "DG3",
             "v5_HW": "HW",
             "v5_GPT_DG3": "GPT_DG3",
-            "v5_DOLS": "DOLS",
-            "v5_GenHW": "GenHW"
+            "v5_DOLS": "DOLS"
             }
 
 if __name__ == "__main__":
@@ -929,3 +982,99 @@ if __name__ == "__main__":
         sweep_cfg = read_cfg_file(cfg_name=sweep_cfg_name)
         sweep_id = wandb.sweep(sweep_cfg)
         wandb.agent(sweep_id, function=train_model)
+
+
+# def load_prev_and_test(args, cfg_name):
+
+#     # load model
+#     # tmp_path = ROOT + "log/my_translat_GPTdset_DG3_model_04-01-03-20.pt"
+#     # ROOT = /home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/
+#     tmp_path = ROOT + "log/my_translat_DOLS_Cylinder_model_06-21-14-57.pt" 
+#     transformer = torch.load(tmp_path)
+#     model_name = tmp_path[:-3].split('/')[-1]
+#     # load unseen dataset
+#     targ = '5'
+#     dset = 'test'
+#     dataset_path = ROOT + f"data/DOLS_Cylinder/targ_{targ}/gathered_targ_{targ}.pkl"
+#     traj_dataset = load_pkl(dataset_path)
+#     dataset_name = dataset_path[:-4].split('/')[-1]
+#     # src_stats_path = tmp_path[:-3] + "_src_stats.npy"
+#     src_stats_path = ROOT + f"log/{model_name}_src_stats.npy"
+#     src_stats = np.load(src_stats_path)
+#     src_stats = (src_stats[0], src_stats[1])
+
+#     idx_split, set_split = get_data_split(traj_dataset,
+#                                     split_ratio=[0.8,0.05,0.15], 
+#                                     random_seed=42,
+#                                     random_split=True)
+#     us_train_traj_set, us_test_traj_set, us_val_traj_set = set_split
+#     us_train_idx_set, us_test_idx_set, us_val_idx_set = idx_split
+#     us_train_traj_set = create_action_dataset_v2(us_train_traj_set, 
+#                             idx_set=[None],
+#                             context_len=101,
+#                             # norm_params_4_val = src_stats
+#                                         )
+#     # _, _, us_test_traj_set = set_split
+#     # _, _, us_test_idx_set = idx_split
+#     us_val_traj_set = create_action_dataset_v2(us_val_traj_set, 
+#                             idx_set=[None],
+#                             context_len=101,
+#                             norm_params_4_val = src_stats
+#                                         )
+#     us_test_traj_set = create_action_dataset_v2(us_test_traj_set, 
+#                             idx_set=[None],
+#                             context_len=101,
+#                             norm_params_4_val = src_stats
+#                                         )
+    
+#     # src_stats = us_test_traj_set.get_src_stats()
+#     test_idx_set = None #TODO: clean unneeded vars and args
+#     # read cfg not working and requires postprocessing 
+#     # cfg_path =  tmp_path[:-3] + ".yml"
+#     # cfg =  read_cfg_file(cfg_path)
+#     cfg = jugaad_cfg(context_len=101, device='cuda')
+#     # translate_start_time = timer()
+
+
+#     op_traj_dict_list, results = translate(transformer,us_test_idx_set, us_test_traj_set, 
+#                                             None, cfg, earlybreak=500)
+#     # translate_end_time = timer()
+#     # print(f"Translate runtime = {(translate_end_time - translate_start_time):.3f}s")
+#     os.makedirs(os.path.dirname(ROOT + f"paper_plots/{model_name}/DOLS_targ_{targ}/{dset}_op_traj_dict_list.pkl"),exist_ok=True)
+#     os.makedirs(os.path.dirname(ROOT + f"paper_plots/{model_name}/DOLS_targ_{targ}/{dset}_results.pkl"), exist_ok=True)
+#     save_object(op_traj_dict_list, os.path.join(ROOT, f"paper_plots/{model_name}/DOLS_targ_{targ}/{dset}_op_traj_dict_list.pkl"))
+#     save_object(results,os.path.join(ROOT, f"paper_plots/{model_name}/DOLS_targ_{targ}/{dset}_results.pkl"))
+
+#     op_traj_dict_list = load_pkl(os.path.join(ROOT, f"paper_plots/{model_name}/DOLS_targ_{targ}/{dset}_op_traj_dict_list.pkl"))
+#     results = load_pkl(os.path.join(ROOT, f"paper_plots/{model_name}/DOLS_targ_{targ}/{dset}_results.pkl"))
+#     _, dummy_target, _, _, dummy_env_coef_seq, _,_,dummy_flow_dir,_ = us_val_traj_set[0]
+#     # intantiate gym env for vizualization purposes
+#     env_4_viz = setup_env(dummy_flow_dir)
+
+#     test_set_txy_preds = [d['states'] for d in op_traj_dict_list]
+#     path_lens = [d['n_tsteps'] for d in op_traj_dict_list]
+#     all_att_mat_list =  [d['all_att_mat'] for d in op_traj_dict_list]
+#     success_list = [d['success'] for d in op_traj_dict_list]
+#     actions = [d['actions'] for d in op_traj_dict_list]
+    
+#     # taken from vis_traj_with_attention.py in decision transformer project
+#     print(f"model_name = {model_name}")
+#     save_dir = "paper_plots/"  + model_name + f"/DOLS_targ_{targ}/increased_cbar"
+#     save_dir = join(ROOT,save_dir)
+#     if not os.path.exists(save_dir):
+#         os.mkdir(save_dir)
+#     paper_plot_info = {"trajs_by_arr": {"fname":"T_arr"},
+#                     "trajs_by_att": {"ts":[17,46, 70],"fname":"att"},
+#                     "att_heatmap":{"fname":"heatmap"},
+#                     "plot_val_ip_op":{"fname":"test_ip_op"},
+#                     "plot_trajs_ip_op":{"fname":"test_trajs_ip_op"},
+#                     "plot_actions":{"fname":"test_actions_ip_op"},
+#                     "plot_train_val_ip_op":{"fname":"plot_train_val_ip_op"},
+#                     "loss_avg_returns":{"fname":"loss"},
+#                     "vel_field":{"fname":"vel_field", "ts":[1,60,119]}
+#                         }
+#     pp = paper_plots(env_4_viz, op_traj_dict_list, src_stats,
+#                         paper_plot_info=paper_plot_info,
+#                         save_dir=save_dir)
+#     pp.plot_val_ip_op(us_test_traj_set, test_set_txy_preds, path_lens, success_list)
+#     pp.plot_trajs_ip_op(us_test_traj_set, test_set_txy_preds, path_lens, success_list)

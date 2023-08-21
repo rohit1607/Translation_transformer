@@ -15,42 +15,60 @@ add_transition_noise_during_inf: False
 noise_var: [0.1,0]
 
 dataset_name: "GenHW"
-dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GenHW_all/Gathered_datasets/gathered_5_50/gathered_rep_5_best_timm_maeModel_17D_500E.pkl"
+dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GenHW_all/Gathered_datasets/gathered_17_500/gathered_17.pkl"
+# dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GenHW_all/Gathered_datasets/gathered_11_500/gathered_rep_11_mae_model_0.25.pkl"
 log_dir: "log"
 params2_name: "data/DOLS_Cylinder/params.yml"
 
-mae_model_name: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/saved_mae_models/best_timm_maeModel_17D_500E.pt"
+mae_model_name: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/saved_mae_models/mae_model_0.25.pt"
 
 random_split: True
 split_tr_tst_val: [0.6, 0.2, 0.2]
 # split_tr_tst_val: [0.01, 0.98, 0.01]
-
 split_ran_seed: 42
 comp_val_loss: False
 translate_earlybreaks: [50, 200, 500]
 
 max_eval_ep_len: 120
 num_eval_ep: 200
-eval_inerval: 20
+eval_inerval: 5
 batch_size: 32
 
+loss_type: 'mean_norm_of_vec_diff'    #mse_over_angle
 optimizer_name: 'AdamW'
-lr: 0.0005
-final_lr: 0.000001
+lr: 0.001
+final_lr: 0.0001
 use_scheduler: True
 wt_decay: 0.001
 warmup_steps: 10000
-num_epochs: 500
+num_epochs: 200
+model_save_interval: 50
 num_updates_per_iter: 500
 add_target_loss: False
 a_tl: 1000
 
 target_conditioning: False 
-num_encoder_layers: 4
-num_decoder_layers: 4
-context_len: 121
-embed_dim: 32
-n_heads: 8
+pos_encoding_type: 'simple' # simple or sin
+num_encoder_layers: 2
+num_decoder_layers: 2
+context_len: 50
+req_context_len: 36
+embed_dim: 80
+n_heads: 4
 dropout_p: 0.1
 
 device: 'cuda'
+
+preprocessor: 'ViT_scratch'
+
+# vit_scratch config
+# hidden_size_vit: 128 = emb_dim
+num_hidden_layers_vit: 2
+num_attention_heads_vit: 4
+intermediate_size_vit: 256
+image_size_vit: 224
+patch_size_vit: 16
+num_channels_vit: 2
+hidden_dropout_prob_vit: 0.0
+attention_probs_dropout_prob_vit: 0.0
+# 4 4 32

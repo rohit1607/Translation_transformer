@@ -427,8 +427,8 @@ def load_velocity(flow_dir):
 
 def extract_velocity(vel_field_data, t, rzn):
     nmodes =  vel_field_data[2].shape[1]
-    vx = vel_field_data[0][t,:,:]
-    vy = vel_field_data[1][t,:,:] 
+    vx = vel_field_data[0][t,:,:].copy()
+    vy = vel_field_data[1][t,:,:].copy()
 
     for m in range(nmodes):
         vx += vel_field_data[2][t, m, :, :]*vel_field_data[4][t, rzn,m]
@@ -441,7 +441,17 @@ def preprocessing_for_mae(vx_vy_list):
     vx_vy_tensor = F.interpolate(vx_vy_tensor, size=(256, 256), mode='bilinear', align_corners=False)     #120,2,256,256
     return vx_vy_tensor    
     
+def convert_vel_to_image(im, image_size):
+    # TODO: do it for all images in one go
+    sz = image_size
+    im_tensor = torch.tensor(im)
+    # im_tensor = im_tensor.permute(2,0,1)    # 2,100,100
+    im_tensor = im_tensor.unsqueeze(0)  # Add batch dimension
+    im_tensor = F.interpolate(im_tensor, size=(sz, sz), mode='bilinear', align_corners=False)     # 1,2,256,256
+    im_tensor = im_tensor.squeeze(0)  # Remove batch dimension              
     
+    return im_tensor   
+
 class create_action_dataset_v3(Dataset):
     def __init__(self, dataset, 
                         idx_set,
@@ -476,68 +486,6 @@ class create_action_dataset_v3(Dataset):
         # extract actions (tgt) and scale them to range [0,1)
         self.Y = [item[2]/(2*np.pi) for item in self.dataset]
 
-        # self.X = np.array([np.concatenate((item[0], item[1]), axis=-1) for item in self.dataset])
-        # Y = f(X)
-        # case1: naive- loading data from flow_dir and rzn in each sample of the dataset
-        # TO DO: Naive method is slow, have to improve without loop
-        # self.X = np.array([item[0] for item in self.dataset])
-
-        ## Old version - Rewritten in __getitem__ on 19.0.23
-        # print("Extracting representations")
-        # self.X = np.array([self.extract_latent_rep(item[-2],item[-1]).cpu().numpy() for item in self.dataset]) # expected output shape (1?,120,rep_dim)
-        
-        # self.X_mean = np.mean(self.X, axis=0)
-        # self.X_std = np.std(self.X, axis=0)
-        # self.X_std[np.where(self.X_std==0)] = std_eps
-
-
-        # # normalzise
-        # if norm_params_4_val == None:
-        #     for i in range(len(self.X)): 
-        #         self.X[i] = self.X[i] - self.X_mean # TO DO: Std deviation RuntimeWarning: invalid value encountered in divide self.X[i] = self.X[i] - self.X_mean
-        #         # TODO: some std_devs are 0. need to handle them
-        #         self.X[i] = np.divide(self.X[i], self.X_std)
-        #         # self.Y[i] = self.Y[i] - self.Y_mean
-        #         # self.Y[i] = np.divide(self.Y[i], self.Y_std)
-        # else:
-        #     tr_X_mean, tr_X_std= norm_params_4_val
-        #     tr_X_std[np.where(tr_X_std==0)] = std_eps
-           
-        #     for i in range(len(self.X)):
-        #         self.X[i] = self.X[i] - tr_X_mean
-        #         self.X[i] = np.divide(self.X[i], tr_X_std)   
-        ## Old version - Rewritten in __getitem__ on 19.0.23
-
-
-                # self.Y[i] = self.Y[i] - tr_Y_mean
-                # self.Y[i] = np.divide(self.Y[i], tr_Y_std)
-        # store actions across realizations
-        # TODO: try action normalization
-    
-    ## ----------- Shifted outside --------- 
-    # def extract_latent_rep(self, flow_dir, rzn):
-    #     # m = re.search(r'\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+', flow_dir)
-    #     # flow_dir_new = flow_dir[:m.end()]
-    #     # dummy_dir = flow_dir_new
-    #     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    #     # device = torch.device("cpu")
-    #     vx_vy_list = []
-    #     vel_data = load_velocity(flow_dir) # Shape (list) : [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
-    #     for t in range(vel_data[2].shape[0]): # Extract velocity over all timesteps
-    #         temp = extract_velocity(vel_data, t, rzn)
-    #         vx_vy_list.append(temp)
-    #     vx_vy_list = np.array(vx_vy_list) # Shape (array) : (120, 2, 100, 100) 
-    #     preprocessed_vx_vy = preprocessing_for_mae(vx_vy_list) # torch.Size([120, 2, 256, 256]) (tensor)
-    #     self.mae.eval()
-    #     with torch.no_grad():
-    #         #loss = self.mae(preprocessed_vx_vy_list.to(device))
-    #         latent_reps = self.mae(preprocessed_vx_vy.to(device),loss=False)
-    #         shape = latent_reps.shape
-    #         latent_reps = torch.reshape(latent_reps, (shape[0],-1))
-    #         print(latent_reps.shape)
-            
-    #     return latent_reps.cpu() #shape (120, rep_dim)
-      
       
     # def get_src_stats(self):
     #     return (self.X_mean, self.X_std)
@@ -622,7 +570,7 @@ class create_action_dataset_v4(Dataset):
                         mae,
                         norm_params_4_val=None):
         """
-        Different from v3:  (see v2 docstring for difference wrt v1)
+        Different from v3:  (see v3 docstring for difference wrt v2)
             - returns start and end locations as part of input seqence        
 
         dataset: [(Yi_r, obs_r, actions_r, states_r,
@@ -676,26 +624,7 @@ class create_action_dataset_v4(Dataset):
         padding_len = None
         if traj_len > self.context_len:
             # TODO: correcly write if condition
-            # sample random index to slice trajectory
-            si = random.randint(0, traj_len - self.context_len)
-
-            # states = torch.from_numpy(traj['states'][si : si + self.context_len])
-            # # NOTE: add extra padde
-            # states = torch.cat([states, torch.zeros(1,states.shape[1:])], dim=0)
-            try:
-                actions = torch.from_numpy(actions[si : si + self.context_len + 1])
-            except:
-                actions = torch.cat([actions,
-                                    torch.zeros(([1] + list(actions.shape[1:])),
-                                    dtype=actions.dtype)],
-                                    dim=0)
-            timesteps = torch.arange(start=si, end=si+self.context_len, step=1)
-
-            # # all ones since no padding
-            traj_mask = torch.zeros(self.context_len, dtype=torch.long).to(torch.bool)
-            print(f" entering if condition - should not happen for basic cases")
-            print(f"actions.shape = {actions.shape}")
-            print(f"traj_len = {traj_len}")
+          
             sys.exit()
         else:
             padding_len = self.context_len - traj_len 
@@ -721,7 +650,109 @@ class create_action_dataset_v4(Dataset):
 
 
         return  timesteps, actions, traj_mask, target_state, encoder_input, traj_len, idx, flow_dir, rzn
+    
+    
+class create_action_dataset_v5(Dataset):
+    def __init__(self, dataset, 
+                        idx_set,
+                        context_len, 
+                        pad_chan3 = False,
+                        norm_params_4_val=None):
+        """
+        Different from v4:  (see v4 docstring for difference wrt v3)
+            -       
 
+        dataset: [(Yi_r, obs_r, actions_r, states_r,
+                     timesteps_r, dones_r, success_r, 
+                     target_pos_r, start_pos_r, flow_dir, rzn), (..), ...]
+
+        Computes Dones, Normalizes trajs, masks trajs based on their lengths wrt context_len
+        dataset: list of experience dictionaries 
+        context_len: context lenght of the transformer
+        env_info: (String) env name 
+
+        Note: Written for a particular env field
+        """
+        self.std_eps = 1e-6
+
+        self.context_len = context_len
+        self.n_trajs = len(dataset)
+        # self.mae = mae
+        self.dataset = dataset
+        # extract actions (tgt) and scale them to range [0,1)
+        self.Y = [item[2]/(2*np.pi) for item in self.dataset]
+
+
+    def __len__(self):
+        return len(self.dataset)
+        
+
+    def __getitem__(self, idx):
+        env_coef_seq, _, _, _, _, _, success, target_pos, start_pos, flow_dir, rzn = self.dataset[idx]
+        actions = self.Y[idx]
+        traj_len = len(actions)
+
+        vel_field_data = load_velocity(flow_dir)
+        #TODO: remove hardcoded 256 image size and take input from config
+        velocities_r = [convert_vel_to_image(extract_velocity(vel_field_data,t,rzn),224) for t in range(env_coef_seq.shape[0]) ]
+        velocities_r = torch.stack(velocities_r, axis=0)  # shape (post): [120, 2, 256, 256]
+
+        """
+        TODO: need to add location and normalization in custom model after representations.
+        # encoder_input = torch.zeros((1,env_coef_seq.shape[-1])) #
+        # # TODO: normalized pos (hardcoded) has different scale than representatons
+        # encoder_input[0,0:2] = torch.tensor(start_pos)/100.
+        # encoder_input[0,2:4] = torch.tensor(target_pos)/100.
+        # encoder_input = torch.cat([encoder_input, env_coef_seq], axis=-2)
+        # # Layer normalization
+        # encoder_input_mean = torch.mean(encoder_input, axis=-1).reshape(-1,1)
+        # encoder_input_std = torch.std(encoder_input, axis=-1).reshape(-1,1)
+        # encoder_input_std[torch.where(encoder_input_std==0)] = self.std_eps
+
+        # encoder_input = encoder_input - encoder_input_mean
+        # encoder_input = torch.divide(encoder_input, encoder_input_std)
+        """
+        
+        padding_len = None
+        if traj_len > self.context_len:
+            # TODO: correcly write if condition
+            sys.exit()
+        else:
+            padding_len = self.context_len - traj_len 
+
+            # padding with zeros
+            actions = torch.from_numpy(actions)
+
+            # NOTE: paddding_len + 1 for tgt i/o offset for translation tasks
+            actions = torch.cat([actions, # shape (nactions, 1)
+                                # [padding_len+1] is seq_len axis, list(actions.shape[1:] is for everythin apart from seq_len axis
+                                torch.zeros(([padding_len+1] + list(actions.shape[1:])), #[4]+[1]=[4,1]
+                                dtype=actions.dtype)],
+                               dim=0)
+
+
+            timesteps = torch.arange(start=0, end=self.context_len, step=1)
+
+            traj_mask = torch.cat([torch.zeros(traj_len, dtype=torch.long),
+                                   torch.ones(padding_len, dtype=torch.long)],
+                                  dim=0).type(torch.bool)
+        
+        target_state = torch.tensor(target_pos)
+        start_state = torch.tensor(start_pos)
+        loc_tensor = torch.cat([start_state, target_state], dim=0)
+
+        return  timesteps, actions, traj_mask, loc_tensor, velocities_r, traj_len, idx, flow_dir, rzn
+
+
+def convert_angle_to_vectors(angle_seq, device='cpu'):
+    """
+    angle_seq: shape = (n,1)
+    """
+    vec_seq = torch.zeros(angle_seq.shape[0],2).to(device)
+    vec_seq[:,0] = torch.cos(angle_seq[:,0]*2*torch.pi)
+    vec_seq[:,1] = torch.sin(angle_seq[:,0]*2*torch.pi)
+
+    return vec_seq
 """
 https://pytorch.org/tutorials/beginner/translation_transformer.html
 """
@@ -736,8 +767,8 @@ def generate_square_subsequent_mask(sz, device):
     return mask
 
 
-def create_mask(src, tgt, padding_len, device):
-    src_seq_len = src.shape[1] #(BS, context_len, hdim)
+def create_mask(src, tgt, padding_len, device, extra_tokens=0):
+    src_seq_len = src.shape[1] + extra_tokens #(BS, context_len, hdim)
     tgt_seq_len = tgt.shape[1]
     # assert(src_seq_len==tgt_seq_len)
     batch_size = src.shape[0]

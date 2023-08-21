@@ -8,8 +8,8 @@ import os
 # from root_path import ROOT
 from pathlib import Path
 import sys
-from utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object
-from train_mae import MAE, ViT, Transformer, PreNorm, FeedForward, Attention
+from src.utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object
+# from train_mae import MAE, ViT, Transformer, PreNorm, FeedForward, Attention
 from src.Class_VitMae_MOD import VitMae_model
 # from train_timm_mae import 
 
@@ -39,11 +39,16 @@ class ExtractRep:
         vx = vel_field_data[0][t,:,:]
         vy = vel_field_data[1][t,:,:] 
 
-        for m in range(nmodes):
-            vx += vel_field_data[2][t, m, :, :]*vel_field_data[4][t, rzn,m]
-            vy += vel_field_data[3][t, m, :, :] * vel_field_data[4][t, rzn,m]
+        vx1= 0
+        vy1= 0
+        vx1= vx1 + vx
+        vy1= vy1 + vy
 
-        return np.stack([vx,vy], axis=0)
+        for m in range(nmodes):
+            vx1 += vel_field_data[2][t, m, :, :]*vel_field_data[4][t, rzn,m]
+            vy1 += vel_field_data[3][t, m, :, :] * vel_field_data[4][t, rzn,m]
+
+        return np.stack([vx1,vy1], axis=0)
 
     def preprocessing_for_mae(self, vx_vy_list):
         vx_vy_tensor = torch.tensor(vx_vy_list)
@@ -78,8 +83,8 @@ class ExtractRep:
 
 if __name__ == "__main__":
     ROOT = "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GenHW_all/"
-    gather_dir = "10_500"
-    gather_name = 10
+    gather_dir = "11_500"
+    gather_name = 11
     gather_dir = os.path.join(ROOT, f"Gathered_datasets/gathered_{gather_dir}")
     traj_dataset = load_pkl(os.path.join(gather_dir, f"gathered_{gather_name}.pkl"))
     cfg_name = '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/cfg/contGrid_v5_GenHW.yaml'

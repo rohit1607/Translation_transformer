@@ -1,0 +1,112 @@
+program: train.py
+method: grid
+name: my_tt_sweep
+project: translation-transformer-sweep
+metric: 
+  name: ETA
+  goal: minimize
+
+parameters:
+  env_name:
+    value: "gym_examples/contGrid-v5_1"
+  state_dim:
+    value: 3
+  action_dim:
+    value: 1
+  action_range:
+    value: [0, 6.28318]
+  F:
+    value: 1
+  vel_field:
+    value: " "
+  del_t:
+    value: 1.
+  scale_velocity:
+    value: False
+  vmax_by_F:
+    value: 1
+  space_scale:
+    value: 1
+  target_radius:
+    value: 2
+
+  add_transition_noise_during_inf:
+    value: False
+  noise_var:
+    value: [0.1,0]
+
+  dataset_name:
+    value: "GenHW"
+  dataset_path:
+    value: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GenHW_all/Gathered_datasets/gathered_11_500/gathered_rep_11_mae_model_0.25.pkl"
+  log_dir:
+    value: "log"
+  params2_name:
+    value: " "
+
+  mae_model_name: 
+    value: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/saved_mae_models/Bestuned_fbMae_Model_1620D_300E.pt"
+  random_split:
+    value: True
+  split_tr_tst_val:
+    value: [0.6, 0.2, 0.2]
+  split_ran_seed:
+    value: 42
+  comp_val_loss:
+    value: False
+  translate_earlybreaks: 
+    value: [50, 200, 500]
+
+
+  max_eval_ep_len:
+    value: 120
+  num_eval_ep:
+    value: 200
+  eval_inerval:
+    value: 20
+  batch_size:
+    values: [32, 256]
+
+  optimizer_name:
+    value: 'Adam'
+  lr:
+    values: [0.0001, 0.00001]
+  final_lr: 
+    value: 0.000001  
+  use_scheduler:
+    value: True
+  wt_decay:
+    value: 0.001
+  warmup_steps:
+    value: 10000
+  num_epochs:
+    value: 500
+  num_updates_per_iter:
+    value: 500
+  add_target_loss:
+    value: False
+  a_tl:
+    value: 1000
+
+  target_conditioning:
+    value: False 
+  num_encoder_layers:
+    value: 4
+  num_decoder_layers:
+    value: 4
+  context_len:
+    value: 121
+  embed_dim:
+    values: [128, 512]
+  n_heads:
+    value: 8
+  dropout_p:
+    value: 0.1
+
+  device:
+    value: 'cuda'
+
+
+  
+  
+ 

@@ -7,6 +7,9 @@ import time
 import math
 import yaml
 import matplotlib.pyplot as plt
+from prettytable import PrettyTable
+import os
+
 def save_yaml(savepath, data):
     with open(savepath, 'w') as outfile:
         yaml.dump(data, outfile, default_flow_style=False)
@@ -23,6 +26,9 @@ def load_pkl(path):
 def get_angle_in_0_2pi(angle):
     return (angle + 2 * np.pi) % (2 * np.pi)
 
+def make_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
 
 def read_cfg_file(cfg_name, print_dict=False):
     with open(cfg_name, "r") as file:
@@ -104,3 +110,26 @@ class log_and_viz_params:
 def print_dict(dic):
     for key, value in dic.items():
         print(f"{key}:\t {value}")
+        
+
+def count_parameters(model):
+    table = PrettyTable(["Modules", "Parameters"])
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        params = parameter.numel()
+        table.add_row([name, params])
+        total_params += params
+    print(table)
+    print(f"Total Trainable Params: {total_params}")
+    return total_params
+    
+def show_num_of_params(model, model_name="transformer", only_trainable=True):
+    num_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total {model_name} Params: {num_params}")
+    if only_trainable:
+        print(f"Trainable {model_name} Params: {trainable_params} ")
+        return trainable_params
+    return num_params
