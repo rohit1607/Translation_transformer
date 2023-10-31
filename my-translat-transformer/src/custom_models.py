@@ -7,9 +7,11 @@ from torch import Tensor
 import torch
 import torch.nn as nn
 from torch.nn import Transformer
+import torch.nn.functional as F
 import math
 from transformers import ViTMAEConfig, ViTMAEForPreTraining
 from transformers import ViTConfig, ViTModel
+
 
 import timm
 
@@ -338,6 +340,126 @@ class e2e_Seq2SeqTransformer_v1(nn.Module):
 
 
 
+
+
+
+
+
+class EnvEnc_dtDec_Transformer_v1(nn.Module):
+    def __init__(self,
+                 src_vec_dim: int,
+                 state_dim: int,
+                 action_dim: int,
+                 max_tsteps: int,
+                 num_encoder_layers: int,
+                 num_decoder_layers: int,
+                 emb_size: int,
+                 nhead: int,
+                 dim_feedforward: int = None,
+                 dropout: float = 0.1,
+                 batch_first = True,
+                 positional_encoding: str = "simple",
+                 ):
+        super(EnvEnc_dtDec_Transformer_v1, self).__init__()
+
+        if dim_feedforward == None:
+            dim_feedforward = nhead * emb_size
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.emb_size = emb_size
+        self.max_tseps = max_tsteps
+        self.max_dec_len = 3 * (max_tsteps) + 1
+        self.transformer = Transformer(d_model=emb_size,
+                                       nhead=nhead,
+                                       num_encoder_layers=num_encoder_layers,
+                                       num_decoder_layers=num_decoder_layers,
+                                       dim_feedforward=dim_feedforward,
+                                       dropout=dropout,
+                                       batch_first=batch_first)
+        self.src_tok_emb = LinTokenEmbedding(src_vec_dim, emb_size)
+        self.embed_rtg = torch.nn.Linear(1, emb_size)
+        self.embed_state = torch.nn.Linear(state_dim, emb_size)
+        self.embed_action = torch.nn.Linear(action_dim, emb_size)
+        self.emb_sf = torch.nn.Linear(state_dim - 1, emb_size)
+        
+        # self.predict_rtg = torch.nn.Linear(emb_size, 1)
+        # self.predict_state = torch.nn.Linear(emb_size, state_dim)
+        self.predict_action = nn.Sequential(nn.Linear(emb_size, action_dim), nn.Sigmoid())
+        
+        # maxlen=max_tsteps+1 . +1 to remove out of index error
+        if positional_encoding == 'sin':
+            self.positional_encoding = PositionalEncoding(
+                emb_size, dropout=dropout, maxlen=max_tsteps+1)
+        elif positional_encoding == "simple":
+            self.positional_encoding = SimplePositionalEncoding(emb_size, max_tsteps+1)
+        else:
+            raise ValueError("No such positional_encoding type")
+
+    def forward(self,
+                src: Tensor,
+                tgt_states: Tensor,
+                tgt_actions: Tensor,
+                tgt_rtg: Tensor,
+                tgt_final_pos: Tensor,
+                src_mask: Tensor,
+                tgt_mask: Tensor,
+                src_padding_mask: Tensor,
+                tgt_padding_mask: Tensor,
+                memory_key_padding_mask: Tensor,
+                timesteps: Tensor):
+
+        #  simple positional embedding as in Decistion Transformer
+        src_emb = self.src_tok_emb(src)
+        B,T_src,D = src_emb.shape
+        src_emb = self.positional_encoding(src_emb, timesteps[:,:T_src])
+        # tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg), timesteps)
+        tgt_emb = self.assemble_tgt_seq(tgt_states, tgt_actions, tgt_rtg, tgt_final_pos, timesteps)
+        
+        # tgt_emb = "Sf R_ S0 A0 R0 S1 A1 R1 ...Sn m m m"
+        
+        outs = self.transformer(src_emb, tgt_emb, src_mask, tgt_mask, None,
+                                src_padding_mask, tgt_padding_mask, memory_key_padding_mask)
+        
+        # outs = "R_ S0 A0 R0 S1 A1 R1 ...Sn m m m"
+        action_preds = self.predict_action(outs[:,2::3])
+        return action_preds
+    
+    def assemble_tgt_seq(self, tgt_states, tgt_actions, tgt_rtg, tgt_final_pos, timesteps):
+        B,T,D = tgt_states.shape
+        tgt_emb = torch.zeros((B,self.max_dec_len,self.emb_size),device=tgt_states.get_device())
+
+        tgt_states_emb = self.positional_encoding(self.embed_state(tgt_states),timesteps[:,:T])
+        tgt_actions_emb = self.positional_encoding(self.embed_action(tgt_actions),timesteps[:,:T])
+        tgt_rtg_emb = self.positional_encoding(self.embed_rtg(tgt_rtg),timesteps[:,:T])
+        tgt_final_pos_emb = self.emb_sf(tgt_final_pos)
+
+        # IMP: any change in indexing here should
+        # reflict in assemble_masks in src_utils
+        tgt_emb[:,0,:] = tgt_final_pos_emb[:]
+        tgt_emb[:,1:1+3*T:3,:] = tgt_rtg_emb[:]
+        tgt_emb[:,2:2+3*T:3,:] = tgt_states_emb[:]
+        tgt_emb[:,3:3+3*T:3,:] = tgt_actions_emb[:]
+
+        return tgt_emb
+
+    def encode(self, src: Tensor, src_mask: Tensor, timesteps: Tensor):
+        return self.transformer.encoder(self.positional_encoding(
+                            self.src_tok_emb(src), timesteps), src_mask)
+
+    def decode(self,
+                tgt_states: Tensor,
+                tgt_actions: Tensor,
+                tgt_rtg: Tensor,
+                tgt_final_pos: Tensor,
+                memory: Tensor, tgt_mask: Tensor, timesteps: Tensor):
+        
+        tgt_emb = self.assemble_tgt_seq(tgt_states, tgt_actions, tgt_rtg, tgt_final_pos, timesteps)   
+        return self.transformer.decoder(tgt_emb, memory,tgt_mask)
+
+
+
+
+
 class timm_ViT(nn.Module):
     
     def __init__(self, pixel_scale=1):
@@ -450,5 +572,3 @@ class fbMae_model(nn.Module):
     
 
 # END
-
-

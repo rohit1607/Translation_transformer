@@ -11,12 +11,12 @@ config = {
 
     "nth": 150,  # for train_mae.py 
 
-    "aftrain_testDatpath": "/home/rohit/Documents/Research/data_prep/HDD_data/GenHW/GenHW_TV_DNV_dl_c83_m10_s20_f2_A1/",   # must always include
+    "aftrain_testDatpath": "/mnt/cd6279e3-2e86-4172-a50f-71e3717d8fb8/rohitc/GPTdset_DG3/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_iclr_scaled_3_5/",   # must always include
     
     "test_path": "/home/rohit/Documents/Research/data_prep/raj/test_logs/",
     "train_path": "/home/rohit/Documents/Research/data_prep/raj/train_logs/",
 
-    "Train_data_path": "/home/rohit/Documents/Research/data_prep/HDD_data/GenHW/",
+    "Train_data_path": "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_iclr_scaled_3_*",
 
 
     # VIT

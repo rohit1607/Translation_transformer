@@ -11,7 +11,7 @@ import random
 
 from einops import rearrange, repeat
 
-from sab_data_load import plot_vel_field, GiveMe_loaders, load_vel, VelocityDataset
+from mae_all_data_load import plot_vel_field, GiveMe_loaders, load_vel, VelocityDataset
 
 from transformers import ViTMAEConfig, ViTMAEModel, ViTMAEForPreTraining
 

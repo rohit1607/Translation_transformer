@@ -12,7 +12,7 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             // "args": ["--CFG", "v5_GPT_DG3", "--mode", "load_prev_and_test"],
-            "args": ["--CFG", "v5_GenHW", "--mode", "load_prev_and_test"],
+            "args": ["--mode", "single_run"],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "1"
         }

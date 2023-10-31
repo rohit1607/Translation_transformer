@@ -9,6 +9,7 @@ import yaml
 import matplotlib.pyplot as plt
 from prettytable import PrettyTable
 import os
+import collections
 
 def save_yaml(savepath, data):
     with open(savepath, 'w') as outfile:
@@ -26,9 +27,9 @@ def load_pkl(path):
 def get_angle_in_0_2pi(angle):
     return (angle + 2 * np.pi) % (2 * np.pi)
 
-def make_dir(path):
+def make_dir(path, exist_ok=False):
     if not os.path.exists(path):
-        os.makedirs(path)
+        os.makedirs(path, exist_ok=exist_ok)
 
 def read_cfg_file(cfg_name, print_dict=False):
     with open(cfg_name, "r") as file:
@@ -133,3 +134,8 @@ def show_num_of_params(model, model_name="transformer", only_trainable=True):
         print(f"Trainable {model_name} Params: {trainable_params} ")
         return trainable_params
     return num_params
+
+def convert_dict_to_obj(dictr):
+    obj = collections.namedtuple('cfg', dictr.keys())(*dictr.values())
+    return obj
+    

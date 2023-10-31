@@ -1,0 +1,29 @@
+# dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_2_100_2872/gathered_rep_2_Bestuned_fbMae_Model_5000D_168E.pkl"
+dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_1_100_50k/gathered_rep_1_s_Bestuned_fbMae_Model_5000D_168E.pkl"
+dataset_name: "DG3"
+log_dir: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log"
+
+device: 'cuda'
+drop_p: 0.1
+n_heads: 2
+context_len: 120
+h_dim: 32
+n_blocks: 2
+bs: 8
+
+random_split: True
+split_tr_tst_val: [0.2, 0.65, 0.15]
+# split_tr_tst_val: [0.01, 0.98, 0.01]
+translate_earlybreaks: [50, 50, 50]
+
+split_ran_seed: 42
+
+B: 10
+T: 120
+eval_inerval: 10
+
+optimizer_name: 'AdamW'
+lr: 0.001
+final_lr: 0.000001
+wt_decay: 0.01
+num_epochs: 20

@@ -23,6 +23,54 @@ from pathlib import Path
 from utils import read_cfg_file
 import gym
 import gym_examples
+sys.path.append("/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer")
+from extract_rep_3channel import ExtractRep
+
+
+
+def setup_env(flow_dir):
+    flow_specific_cfg = read_cfg_file(cfg_name=join(flow_dir,"cfg_used_in_proc_data.yml"))
+    env_name = flow_specific_cfg["env_name"]
+    params2 = read_cfg_file(cfg_name=join(flow_dir,"params.yml"))
+    env = gym.make(env_name)
+    # # IMP: CLEAN CODE
+    # env.if_scale_velocity = True
+    env.setup(flow_specific_cfg, params2, add_trans_noise=False)
+    return env
+
+
+def checkpoint_model(model, save_dir, epoch, optimizer, 
+                     scheduler=None, 
+                     loss=None, 
+                     save_type ='cur_best', # or "some_epoch"
+                     only_save_states=True):
+    """
+    save_type: cur_best overwrites the current best model based on val_loss
+                some_epoch save states at given epoch
+    only_save_states: saves only state_dicts if true. saves full model as well if False
+    loss: (avg_tr_loss, avg_val_loss) at epoch 
+    """
+    # save full model. it will have architecture info as well
+    if not only_save_states:
+        save_path = join(save_dir, "arch.pt")
+        torch.save(model, save_path)
+        return
+    
+    # save states
+    if save_type == 'cur_best':
+        save_path = join(save_dir, f"best_vloss.pt")
+    elif save_type == "some_epoch":
+        save_path = join(save_dir, f"ep{epoch}.pt")
+    torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state': scheduler.state_dict(),
+            'tr_loss': loss[0],
+            'val_loss': loss[1],
+            }, save_path)
+    
+    return
 
 
 def get_data_split(traj_dataset, split_ratio=[0.6, 0.2, 0.2], random_seed=42, random_split=True):
@@ -34,7 +82,7 @@ def get_data_split(traj_dataset, split_ratio=[0.6, 0.2, 0.2], random_seed=42, ra
     idx_split: test_idx, train_idx, val_idx
     set_split:
     """
-    n_trajs =  len(traj_dataset)
+    n_trajs = len(traj_dataset)
     all_idx = [i for i in range(n_trajs)]
     # split all idx to train and (test+val)
     test_val_size = split_ratio[1] + split_ratio[2]
@@ -410,6 +458,146 @@ class create_action_dataset_v2(Dataset):
 
         return  timesteps, actions, traj_mask, target_state, env_coef_seq, traj_len, idx, flow_dir, rzn
 
+class create_action_dataset_v2_aug(Dataset):
+    def __init__(self, dataset, 
+                        idx_set,
+                        context_len, 
+                        norm_params_4_val=None):
+        """
+        Different from v1: 
+            - deals with a combined dataset made from multiple
+              datasets with varying obstacle configs
+            - dataset is cleaned.
+
+        dataset: [(Yi_r, obs_r, actions_r, states_r,
+                     timesteps_r, dones_r, success_r, 
+                     target_pos_r, start_pos_r, flow_dir, rzn), (..), ...]
+
+        Computes Dones, Normalizes trajs, masks trajs based on their lengths wrt context_len
+        dataset: list of experience dictionaries 
+        context_len: context lenght of the transformer
+        env_info: (String) env name 
+
+        Note: Written for a particular env field
+        """
+
+        self.context_len = context_len
+        self.n_trajs = len(dataset)
+        self.dataset = dataset
+        # self.X = []
+        # for item in dataset:
+        #     if len(item[3]) <= 120:
+        #         a = np.concatenate([item[3],np.zeros((120-len(item[3]),3))],axis=0)
+        #         self.X.append(np.concatenate([item[0],item[1],a],axis=-1).astype(np.float32))
+        #     else:
+        #         a = item[3][0:120]
+        #         self.X.append(np.concatenate([item[0],item[1],a],axis=-1).astype(np.float32))
+                
+        
+        self.X = np.array([np.concatenate((item[0], item[1]), axis=-1) for item in self.dataset])
+        # self.X = np.array([item[0] for item in self.dataset]) # Uncomment for DOLS
+        self.X_mean = np.mean(self.X, axis=0)
+        self.X_std = np.std(self.X, axis=0)
+        eps = 2e-15
+
+        # extract actions (tgt) and scale them to range [0,1)
+        # TXY_MEAN = np.array([35.34795 , 41.64394 , 44.63251 ])
+        # TXY_STD = np.array([20.757399, 14.942655, 18.891838])
+        self.txy = [(item[3][0:-1] - TXY_MEAN) / TXY_STD for item in self.dataset]
+        self.a = [item[2]/(2*np.pi) for item in self.dataset]
+        self.Y = [np.concatenate([self.a[i],self.txy[i]],axis=-1) for i in range(len(self.a))]
+
+        # normalzise
+        if norm_params_4_val == None:
+            for i in range(len(self.X)):
+                self.X[i] = self.X[i] - self.X_mean
+                self.X[i] = np.divide(self.X[i], self.X_std + eps)
+                # self.Y[i] = self.Y[i] - self.Y_mean
+                # self.Y[i] = np.divide(self.Y[i], self.Y_std)
+        else:
+            tr_X_mean, tr_X_std= norm_params_4_val
+            for i in range(len(self.X)):
+                self.X[i] = self.X[i] - tr_X_mean
+                self.X[i] = np.divide(self.X[i], tr_X_std + eps)            
+                # self.Y[i] = self.Y[i] - tr_Y_mean
+                # self.Y[i] = np.divide(self.Y[i], tr_Y_std)
+        # store actions across realizations
+        # TODO: try action normalization
+
+
+
+
+    def get_src_stats(self):
+        return (self.X_mean, self.X_std)
+
+
+    # TODO: Verify it returns the no. of trajectories
+    def __len__(self):
+        return len(self.dataset)
+        
+
+    def __getitem__(self, idx):
+        _, _, _, _, _, _, success, target_pos, _, flow_dir, rzn = self.dataset[idx]
+        actions = self.Y[idx]
+        traj_len = len(actions)
+        # env_coef_seq = self.X[idx, :self.context_len, :] # X.shape = (B(r), ETA, coefs+obs_tok+state)
+        env_coef_seq = self.X[idx] # env_ceof_seq.shape =  120, coefs+obs_tok+state
+       
+        padding_len = None
+        
+        if traj_len > self.context_len:
+            # TODO: correcly write if condition
+            # sample random index to slice trajectory
+            si = random.randint(0, traj_len - self.context_len)
+
+            # states = torch.from_numpy(traj['states'][si : si + self.context_len])
+            # # NOTE: add extra padde
+            # states = torch.cat([states, torch.zeros(1,states.shape[1:])], dim=0)
+            try:
+                actions = torch.from_numpy(actions[si : si + self.context_len + 1])
+            except:
+                actions = torch.cat([actions,
+                                    torch.zeros(([1] + list(actions.shape[1:])),
+                                    dtype=actions.dtype)],
+                                    dim=0)
+            timesteps = torch.arange(start=si, end=si+self.context_len, step=1)
+
+            # # all ones since no padding
+            traj_mask = torch.zeros(self.context_len, dtype=torch.long).to(torch.bool)
+            print(f" entering if condition - should not happen for basic cases")
+            print(f"actions.shape = {actions.shape}")
+            print(f"traj_len = {traj_len}")
+            raise ValueError("case not coded for")
+            sys.exit()
+        else:
+            padding_len = self.context_len - traj_len 
+
+            # padding with zeros
+            actions = torch.from_numpy(actions.astype(np.float32))
+
+            env_coef_seq = torch.from_numpy(env_coef_seq)
+            env_coef_seq = torch.cat([env_coef_seq,
+                                      torch.zeros(([self.context_len-120]+list(env_coef_seq.shape[1:])))
+                                      ], dim=0)
+
+            # NOTE: paddding_len + 1 for tgt i/o offset for translation tasks
+            actions = torch.cat([actions, # shape (nactions, 1)
+                                # [padding_len+1] is seq_len axis, list(actions.shape[1:] is for everythin apart from seq_len axis
+                                torch.zeros(([padding_len+1] + list(actions.shape[1:])), #[4]+[1]=[4,1]
+                                dtype=actions.dtype)],
+                               dim=0)
+
+
+            timesteps = torch.arange(start=0, end=self.context_len, step=1)
+
+            traj_mask = torch.cat([torch.zeros(traj_len, dtype=torch.long),
+                                   torch.ones(padding_len, dtype=torch.long)],
+                                  dim=0).type(torch.bool)
+        
+        target_state = torch.tensor(target_pos)
+
+
+        return  timesteps, actions, traj_mask, target_state, env_coef_seq, traj_len, idx, flow_dir, rzn
 
 
 def load_velocity(flow_dir):
@@ -744,6 +932,234 @@ class create_action_dataset_v5(Dataset):
         return  timesteps, actions, traj_mask, loc_tensor, velocities_r, traj_len, idx, flow_dir, rzn
 
 
+class create_env_emb_dataset(Dataset):
+    def __init__(self, dataset, 
+                        idx_set,
+                        context_len, 
+                        pad_chan3 = False,
+                        norm_mode="BN",
+                        norm_params_4_val=None,
+                        ):
+        """
+        dataset of env embeddings
+            -       
+        dataset: [(Yi_r, obs_r, actions_r, states_r,
+                     timesteps_r, dones_r, success_r, 
+                     target_pos_r, start_pos_r, flow_dir, rzn), (..), ...]
+
+        Computes Dones, Normalizes trajs, masks trajs based on their lengths wrt context_len
+        dataset: list of experience dictionaries 
+        context_len: context lenght of the transformer
+        env_info: (String) env name 
+        """
+        
+        self.std_eps = 1e-6
+        self.context_len = context_len
+        self.n_samples = len(dataset)
+        self.dataset = dataset
+
+        emb_list_tensors = [item[0] for item in dataset]
+        self.X = torch.stack(emb_list_tensors)        
+        
+        if norm_mode == "BN":
+            if norm_params_4_val == None:
+                self.X_mean = self.X.mean(axis=0)
+                self.X_std = self.X.std(axis=0)
+                for i in range(len(self.X)):
+                    self.X[i] = self.X[i] - self.X_mean
+                    self.X[i] = np.divide(self.X[i], self.X_std + self.std_eps)
+
+            else:
+                tr_X_mean, tr_X_std= norm_params_4_val
+                for i in range(len(self.X)):
+                    self.X[i] = self.X[i] - tr_X_mean
+                    self.X[i] = np.divide(self.X[i], tr_X_std + self.std_eps)    
+
+        if norm_mode == "LN":
+            for i in range(len(self.X)):
+                self.X[i] = self.X[i] - self.X[i].mean(axis=-1)
+                self.X[i] = np.divide(self.X[i], self.X[i].std(axis=-1) + self.std_eps)
+                
+                
+    def __len__(self):
+        return len(self.dataset)
+        
+
+    def __getitem__(self, idx):
+        env_reps, _, _, _, _, _, _,_,_, flow_dir, rzn = self.dataset[idx]
+        padding_len = None
+        traj_len = len(env_reps)
+        if traj_len > self.context_len:
+            # TODO: correcly write if condition
+            sys.exit()
+        else:
+            padding_len = self.context_len - traj_len 
+
+            # padding with zeros
+
+            # NOTE: paddding_len + 1 for tgt i/o offset for translation tasks
+            env_reps = torch.cat([env_reps, # shape (nenv_reps, 1)
+                                # [padding_len+1] is seq_len axis, list(env_reps.shape[1:] is for everythin apart from seq_len axis
+                                torch.zeros(([padding_len+1] + list(env_reps.shape[1:])), #[4]+[1]=[4,1]
+                                dtype=env_reps.dtype)],
+                               dim=0)
+
+
+            timesteps = torch.arange(start=0, end=self.context_len, step=1)
+
+            traj_mask = torch.cat([torch.zeros(traj_len, dtype=torch.long),
+                                   torch.ones(padding_len, dtype=torch.long)],
+                                  dim=0).type(torch.bool)
+
+        return  timesteps, env_reps, traj_mask, idx, flow_dir, rzn
+
+
+
+class create_envEnc_dtDec_dataset(Dataset):
+    def __init__(self, dataset, 
+                        idx_set,
+                        nT, # contextl len
+                        mae,
+                        rtg_scale,
+                        norm_params_4_val=None,
+                        LN=False):
+        """
+        derived from create_action_dataset_v4
+        for creating dataset in train_pptt.py
+          env_emb encoder
+          decTransformer decoder
+
+        dataset: [(Yi_r, obs_r, actions_r, states_r,
+                     timesteps_r, rewards_r, dones_r, success_r, 
+                     target_pos_r, start_pos_r, flow_dir, rzn), (..), ...]
+
+        dataset: list of experience dictionaries 
+        context_len: context lenght of the transformer
+        env_info: (String) env name 
+
+        Note: Written for a particular env field
+        """
+        
+        self.extractor = ExtractRep(None, mae)
+        self.nT = nT
+        self.enc_max_len = nT
+        self.dec_max_len = 3*(nT) + 1
+        self.LN = LN
+        self.std_eps = 1e-6
+        self.rtg_scale = rtg_scale
+        self.n_trajs = len(dataset)
+        self.dataset = dataset
+
+        # TODO: take a random subset of dataset to calculate statistics
+        #        It will help in case dataset is too large
+        if norm_params_4_val == None:
+            states = [item[3] for item in self.dataset]
+            states = np.concatenate(states, axis=0)
+            self.states_mean = np.mean(states, axis=0)
+            self.states_std = np.std(states, axis=0)
+        else:
+            self.states_mean, self.states_std = norm_params_4_val
+
+
+    def __len__(self):
+        return len(self.dataset)
+        
+    def get_states_stats(self):
+        return self.states_mean, self.states_std
+
+    def __getitem__(self, idx):
+        # Yi_r, obs_r, actions_r, states_r, timesteps_r, rewards_r, dones_r, success_r, 
+        # target_pos_r, start_pos_r, flow_dir, rzn 
+                     
+        _, _, actions, states,  timesteps, rews, dones, success, trg_pos, st_pos, flow_dir, rzn = self.dataset[idx]
+        
+        trg_pos = np.array(trg_pos, dtype=np.float32)
+        # scale actions to [0,1]    
+        actions = actions / (2*np.pi)
+        states = (states - self.states_mean) / (self.states_std + self.std_eps)
+        # normalize trg position (xy). states_mean is normalized (txy)
+        trg_pos = (trg_pos - self.states_mean[1:]) / (self.states_std[1:] + self.std_eps)
+        # TODO: verify corrrectness, 0 at end
+        rtg = np.flip(np.cumsum(np.flip(rews))) / self.rtg_scale
+        n = len(actions)
+        # dec_io_seq_len = 3*n + 1 #  x0 - {RSA}*n - 0
+        
+        # encoder input
+        encoder_input = self.extractor.extract_latent_rep(flow_dir,rzn,return_type='gpu')  #(120,d=768)
+            
+        # Layer normalization
+        # TODO: Try with and without
+        if self.LN:
+            encoder_input_mean = torch.mean(encoder_input, axis=-1).reshape(-1,1)
+            encoder_input_std = torch.std(encoder_input, axis=-1).reshape(-1,1)
+            encoder_input_std[torch.where(encoder_input_std==0)] = self.std_eps
+
+            encoder_input = encoder_input - encoder_input_mean
+            encoder_input = torch.divide(encoder_input, encoder_input_std)  
+        
+        if n > self.nT:
+            # TODO: correcly write if condition
+            raise ValueError(f"Case not accounted for: dec_input_seq () > dec_len () ")
+        else:
+            e_pad_len = self.nT - encoder_input.shape[0] 
+            encoder_input = torch.cat([encoder_input, # shape (120, d)
+                                # [dec_pad_len] is seq_len axis, list(actions.shape[1:] is for everythin apart from seq_len axis
+                                torch.zeros(([e_pad_len] + list(encoder_input.shape[1:])), #[4]+[1]=[4,1]
+                                dtype=encoder_input.dtype, device=encoder_input.device)],
+                                dim=0)
+            encoder_input_mask = create_padding_mask(self.nT,e_pad_len)
+            
+            a_pad_len = self.nT - n
+            # padding with zeros
+            actions = torch.from_numpy(actions)
+            # NOTE: paddding_len + 1 for tgt i/o offset for translation tasks
+            actions = torch.cat([actions, # shape (nactions, 1)
+                                # [dec_pad_len] is seq_len axis, list(actions.shape[1:] is for everythin apart from seq_len axis
+                                torch.zeros(([a_pad_len] + list(actions.shape[1:])), #[4]+[1]=[4,1]
+                                dtype=actions.dtype)],
+                                dim=0)
+            # actons.shape = (121,1)
+            a_input_mask = create_padding_mask(self.nT,e_pad_len)
+
+            # s_pad_len to make post padded s,r,a sequences of the same length
+            # since states list has 1 extra element compared to r and a
+            s_pad_len = a_pad_len - 1 if a_pad_len > 0 else 0
+            states = torch.from_numpy(states)
+            states = torch.cat([states, # shape (nactions, 1)
+                                # [dec_pad_len] is seq_len axis, list(actions.shape[1:] is for everythin apart from seq_len axis
+                                torch.zeros(([s_pad_len] + list(states.shape[1:])), #[4]+[1]=[4,1]
+                                dtype=states.dtype)],
+                               dim=0)    
+
+            rtg = torch.from_numpy(rtg).unsqueeze(-1)
+            rtg = torch.cat([rtg, # shape (nactions, 1)
+                                # [dec_pad_len] is seq_len axis, list(actions.shape[1:] is for everythin apart from seq_len axis
+                                torch.zeros(([a_pad_len] + list(rtg.shape[1:])), #[4]+[1]=[4,1]
+                                dtype=rtg.dtype)],
+                               dim=0)                
+            timesteps = torch.arange(start=1, end=self.nT+2, step=1)
+            
+            rtg_mask = create_padding_mask(self.nT, a_pad_len)
+            # +1 to pad the terminal state as it will not predict any action
+            states_mask = create_padding_mask(self.nT, s_pad_len+1) 
+            action_mask = create_padding_mask(self.nT, a_pad_len)
+ 
+        final_pos = torch.tensor(trg_pos)
+        tgt_padding_mask = assemble_trsa_masks(self.dec_max_len, rtg_mask, states_mask, action_mask)
+        
+        return  timesteps, actions, states, rtg, action_mask, final_pos, encoder_input, tgt_padding_mask, n, idx, flow_dir, rzn
+    
+def assemble_trsa_masks(tgt_seq_len: int, rmask, smask, amask):
+    # shape of rs, ss, as shoudl be sam
+    T = tgt_seq_len
+    tgt_padding_mask = torch.zeros((T,)).type(torch.bool)
+    tgt_padding_mask[0] = False
+    tgt_padding_mask[1:1+3*T:3] = rmask
+    tgt_padding_mask[2:2+3*T:3] = smask
+    tgt_padding_mask[3:3+3*T:3] = amask
+        
+    return tgt_padding_mask
+
 def convert_angle_to_vectors(angle_seq, device='cpu'):
     """
     angle_seq: shape = (n,1)
@@ -789,6 +1205,17 @@ def create_mask(src, tgt, padding_len, device, extra_tokens=0):
     # print(f" in create mask: tgt_padding_mask = {(tgt_padding_mask.type(torch.int))}")
     # print(f" verify sum {torch.sum(tgt_padding_mask, axis=1)}")
     return src_mask, tgt_mask, src_padding_mask, tgt_padding_mask
+
+def create_padding_mask(seq_len: int, pad_len: int):
+    """
+    creates a mask that 
+    pads last pad_len items of seq_len sized vector
+    Note: no batch dim. to be used in create_x_dataset_funcition._get_item()
+    """
+    padding_mask = torch.zeros((seq_len,)).type(torch.bool)
+    padding_mask[-pad_len:] = True
+
+    return padding_mask
 
 
 def plot_vel_field(env,t,r=0, g_strmplot_lw=1, g_strmplot_arrowsize=1):
@@ -1490,3 +1917,247 @@ def n_nans(var):
     import numpy as np
     shape = var.shape
     return np.sum(np.int32(np.isnan(var.cpu().detach().numpy()))),   len(var.reshape(-1,))
+
+
+"""
+from my-decision-transformer/src_utils
+"""
+def discount_cumsum(x, gamma):
+    disc_cumsum = np.zeros_like(x)
+    disc_cumsum[-1] = x[-1]
+    for t in reversed(range(x.shape[0]-1)):
+        disc_cumsum[t] = x[t] + gamma * disc_cumsum[t+1]
+    return disc_cumsum
+
+
+class create_dt_dataset(Dataset):
+    def __init__(self, dataset, idx_set, context_len, norm_params_4_val=None):
+        """
+        trajectories; 
+        context_len:
+        rtg_scale:
+        state_dim: if = 5, then state is 'txyuv'
+        
+        dataset: [(Yi_r, obs_r, actions_r, states_r,
+                    timesteps_r, dones_r, success_r, 
+                    target_pos_r, start_pos_r, flow_dir, rzn), (..), ...]
+        states =  (t,x,y,xo,yo,wo)
+
+        TODO: Shubham
+        1. Change batch norm to layer norm
+        2. states is just (txy)
+        3. return env_embedding_seq (see pptt code for this)
+        
+        """
+  
+        self.context_len = context_len
+        # TODO: Change if not pkl file
+        self.dataset = dataset
+
+        self.states = []
+        for item in dataset:
+            if len(item[3]) <= 120:
+                self.states.append(np.concatenate([item[3],item[1][0:len(item[3])]],axis=-1).astype(np.float32))
+            else:
+                a = np.concatenate([item[1][0:120],item[1][0:len(item[3])-120]],axis=0)
+                self.states.append(np.concatenate([item[3],a],axis=-1).astype(np.float32))
+        # self.states = [item[3] for item in self.dataset]
+        # try:
+        #     self.states = [np.concatenate([item[3],item[1][0:len(item[3])]],axis=-1).astype(np.float32) for item in self.dataset]
+        # except:
+        #     self.states = [np.concatenate([item[3],item[1][0:120],item[1][0:len(item[3])-120]],axis=-1).astype(np.float32) for item in self.dataset]
+
+        states = np.concatenate(self.states.copy(), axis=0).astype(np.float32)
+        eps = 1e-8
+        self.states_mean, self.states_std = np.mean(states, axis=0), np.std(states, axis=0) + eps
+
+        # extract actions (tgt) and scale them to range [0,1)
+        self.actions = [item[2]/(2*np.pi) for item in self.dataset]
+        # normalzise
+        if norm_params_4_val == None:
+            for i in range(len(self.states)):
+                self.states[i] = self.states[i] - self.states_mean
+                self.states[i] = np.divide(self.states[i], self.states_std + eps)
+
+        else:
+            tr_states_mean, tr_states_std= norm_params_4_val
+            for i in range(len(self.states)):
+                self.states[i] = self.states[i] - tr_states_mean
+                self.states[i] = np.divide(self.states[i], tr_states_std + eps)  
+
+        print("dummy")
+        
+
+    def get_src_stats(self):
+        return self.states_mean, self.states_std
+
+    # TODO: Verify it returns the no. of trajectories
+    def __len__(self):
+        return len(self.states)
+        
+    def __getitem__(self, idx):
+        _, obs, _, _, _, _, _, target_pos, _, flow_dir, rzn = self.dataset[idx]
+        states = self.states[idx]
+        actions = self.actions[idx]
+        traj_len = len(states)              #traj['states'].shape[0]
+        
+        if traj_len > self.context_len:
+            # raise ValueError(" case not coded for")
+            si = random.randint(0, traj_len - self.context_len)
+            states = torch.from_numpy(states[si : si + self.context_len])
+            actions = torch.from_numpy(actions[si : si + self.context_len])
+            returns_to_go = torch.zeros((self.context_len, 1),
+                                dtype=torch.float32)            
+            timesteps = torch.arange(start=si, end=si+self.context_len, step=1)
+
+            # all ones since no padding
+            traj_mask = torch.ones(self.context_len, dtype=torch.long)        
+        
+
+        else:
+            padding_len = self.context_len - traj_len
+
+            # padding with zeros
+            states = torch.from_numpy(states)
+
+            states = torch.cat([states,
+                                torch.zeros(([padding_len] + list(states.shape[1:])),
+                                dtype=states.dtype)],
+                               dim=0)
+
+            actions = torch.from_numpy(actions)
+            actions = torch.cat([actions,
+                                torch.zeros(([padding_len+1] + list(actions.shape[1:])),
+                                dtype=actions.dtype)],
+                               dim=0)
+
+            returns_to_go = torch.zeros((self.context_len, 1),
+                                dtype=torch.float32)
+
+            timesteps = torch.arange(start=0, end=self.context_len, step=1)
+
+            traj_mask = torch.cat([torch.ones(traj_len, dtype=torch.long),
+                                   torch.zeros(padding_len, dtype=torch.long)],
+                                  dim=0)
+            
+        target_pos = torch.from_numpy(np.array(target_pos))
+
+        # dummy_t = float(int(0.8*self.context_len)) # time stamp for target state.
+        # target_state = np.insert(target_state,0,dummy_t,axis=0)
+        # return timesteps, states, actions, returns_to_go, traj_mask, target_state
+        return timesteps, actions, traj_mask, target_pos, states, traj_len, idx, flow_dir, rzn, returns_to_go, obs
+
+
+class create_dt_dataset_v2(Dataset):
+    def __init__(self, dataset, idx_set, context_len, norm_params_4_val=None):
+        """
+        trajectories; 
+        context_len:
+        rtg_scale:
+        state_dim: if = 5, then state is 'txyuv'
+        
+        dataset: [(Yi_r, obs_r, actions_r, states_r,
+                    timesteps_r, dones_r, success_r, 
+                    target_pos_r, start_pos_r, flow_dir, rzn), (..), ...]
+        
+        states =  (ph1,ph2,phi3..,xo,yo,wo)
+        """
+  
+        self.context_len = context_len
+        # TODO: Change if not pkl file
+        self.dataset = dataset
+        self.states = [np.concatenate([item[0],item[1]],axis=-1).astype(np.float32) for item in self.dataset]
+
+
+        # self.states = []
+        # for item in dataset:
+        #     if len(item[3]) <= 120:
+        #         self.states.append(np.concatenate([item[0],item[1][0:len(item[3])]],axis=-1).astype(np.float32))
+        #     else:
+        #         a = np.concatenate([item[1][0:120],item[1][0:len(item[3])-120]],axis=0)
+        #         self.states.append(np.concatenate([item[3],a],axis=-1).astype(np.float32))
+        # self.states = [item[3] for item in self.dataset]
+        # try:
+        #     self.states = [np.concatenate([item[3],item[1][0:len(item[3])]],axis=-1).astype(np.float32) for item in self.dataset]
+        # except:
+        #     self.states = [np.concatenate([item[3],item[1][0:120],item[1][0:len(item[3])-120]],axis=-1).astype(np.float32) for item in self.dataset]
+
+        states = np.concatenate(self.states.copy(), axis=0).astype(np.float32)
+        eps = 1e-8
+        self.states_mean, self.states_std = np.mean(states, axis=0), np.std(states, axis=0) + eps
+
+        # extract actions (tgt) and scale them to range [0,1)
+        self.actions = [item[2]/(2*np.pi) for item in self.dataset]
+        # normalzise
+        if norm_params_4_val == None:
+            for i in range(len(self.states)):
+                self.states[i] = self.states[i] - self.states_mean
+                self.states[i] = np.divide(self.states[i], self.states_std + eps)
+
+        else:
+            tr_states_mean, tr_states_std= norm_params_4_val
+            for i in range(len(self.states)):
+                self.states[i] = self.states[i] - tr_states_mean
+                self.states[i] = np.divide(self.states[i], tr_states_std + eps)  
+
+        print("dummy")
+        
+
+    def get_src_stats(self):
+        return self.states_mean, self.states_std
+
+    # TODO: Verify it returns the no. of trajectories
+    def __len__(self):
+        return len(self.states)
+        
+    def __getitem__(self, idx):
+        _, obs, _, states_p, _, _, _, target_pos, _, flow_dir, rzn = self.dataset[idx]
+        states = self.states[idx]
+        actions = self.actions[idx]
+        traj_len = len(states_p)              #traj['states'].shape[0]
+        
+        if traj_len >= self.context_len:
+            # raise ValueError(" case not coded for")
+            si = random.randint(0, traj_len - self.context_len)
+            states = torch.from_numpy(states[si : si + self.context_len])
+            actions = torch.from_numpy(actions[si : si + self.context_len])
+            returns_to_go = torch.zeros((self.context_len, 1),
+                                dtype=torch.float32)            
+            timesteps = torch.arange(start=si, end=si+self.context_len, step=1)
+
+            # all ones since no padding
+            traj_mask = torch.ones(self.context_len, dtype=torch.long)        
+        
+
+        else:
+            padding_len = self.context_len - traj_len
+            padding_len_4states = self.context_len - 120 
+            # padding with zeros
+            states = torch.from_numpy(states)
+
+            states = torch.cat([states,
+                                torch.zeros(([padding_len_4states] + list(states.shape[1:])),
+                                dtype=states.dtype)],
+                               dim=0)
+
+            actions = torch.from_numpy(actions)
+            actions = torch.cat([actions,
+                                torch.zeros(([padding_len+1] + list(actions.shape[1:])),
+                                dtype=actions.dtype)],
+                               dim=0)
+
+            returns_to_go = torch.zeros((self.context_len, 1),
+                                dtype=torch.float32)
+
+            timesteps = torch.arange(start=0, end=self.context_len, step=1)
+
+            traj_mask = torch.cat([torch.ones(traj_len, dtype=torch.long),
+                                   torch.zeros(padding_len, dtype=torch.long)],
+                                  dim=0)
+            
+        target_pos = torch.from_numpy(np.array(target_pos))
+
+        # dummy_t = float(int(0.8*self.context_len)) # time stamp for target state.
+        # target_state = np.insert(target_state,0,dummy_t,axis=0)
+        # return timesteps, states, actions, returns_to_go, traj_mask, target_state
+        return timesteps, actions, traj_mask, target_pos, states, traj_len, idx, flow_dir, rzn, returns_to_go, obs

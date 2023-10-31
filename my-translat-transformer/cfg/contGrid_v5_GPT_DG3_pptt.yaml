@@ -1,0 +1,84 @@
+# Gym Env
+env_name: "gym_examples/contGrid-v5"
+state_dim: 3
+action_dim: 1
+action_range: [0, 6.28318]
+F: 1
+vel_field: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_25305"
+del_t: 1. 
+scale_velocity: False
+vmax_by_F: 1
+space_scale: 1
+target_radius: 2
+rtg_scale: 100
+add_transition_noise_during_inf: False
+noise_var: [0.1,0]
+
+# Paths
+dataset_name: "GPT_DG3"
+dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_3_100_2872_withr/gathered_3_100_2872_withr.pkl"
+log_dir: "log"
+params2_name: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_25305/params.yml"
+mae_model_name: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/mae_logs/GPT_MAE/Sept23_100envs_cosw_randomr_hs_168E/Bestuned_fbMae_Model_5000D_168E.pt"
+
+# Dataset
+random_split: True
+split_tr_tst_val: [0.7, 0.1, 0.2]
+split_ran_seed: 42
+num_workers: 4
+
+# Training
+device: 'cuda'
+batch_size: 8
+loss_type: 'mean_norm_of_vec_diff'    #mse_over_angle
+optimizer_name: 'AdamW'
+lr: 0.001
+final_lr: 0.00001
+use_scheduler: True
+wt_decay: 0.001
+warmup_steps: 10000
+num_epochs: 100
+break_training: 200
+grad_clip: 10
+# add_target_loss: False
+
+# Architecture
+pos_encoding_type: 'simple' # simple or sin
+num_encoder_layers: 4
+num_decoder_layers: 4
+context_len: 123
+embed_dim: 320
+n_heads: 8
+dropout_p: 0.1
+
+# save and evaluate
+eval_inerval: 2
+chkpt_interval: 5
+chkpt_list: []
+translate_earlybreaks: [2, 2, 2] #tr, test, val
+
+desired_rtg: 70  # TODO: can we do something smarter with the reward sequence?
+
+# Vizualization
+viz_input: False
+sim_tgt_actions: False # works only if viz_input is True
+
+# preprocessor: 'ViT_scratch'
+
+# vit_scratch config
+# hidden_size_vit: 128 = emb_dim
+# num_hidden_layers_vit: 2
+# num_attention_heads_vit: 4
+# intermediate_size_vit: 256
+# image_size_vit: 224
+# patch_size_vit: 16
+# num_channels_vit: 2
+# hidden_dropout_prob_vit: 0.0
+# attention_probs_dropout_prob_vit: 0.0
+# 4 4 32
+
+
+# num_eval_ep: 200
+# a_tl: 1000
+# req_context_len: 36
+# 
