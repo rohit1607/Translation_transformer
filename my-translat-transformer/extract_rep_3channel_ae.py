@@ -8,18 +8,16 @@ import os
 # from root_path import ROOT
 from pathlib import Path
 import sys
+from finetune_tinyautoencoder import TAESD, Clamp, Block, conv, Encoder, Decoder
 from src.utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object
 from scipy.ndimage import distance_transform_edt
 from src.mae_all_data_load import plot_vel_field, GiveMe_loaders, load_vel, VelocityDataset
-from src.Class_fbMae_preTrained import fbMae_model
-from src.Class_optimsAndScheds import Optims_Scheds
-from cfg.config_fbMae import hpt_config
-from cfg.config_fbMae import config as sr_config
+import gc
 
 class ExtractRep:
-    def __init__(self, traj_datset, mae):
+    def __init__(self, traj_datset, tae):
         self.traj_dataset = traj_datset
-        self.mae = mae
+        # self.tae = tae
 
     def load_velocity(self, flow_dir):
         scl = 1
@@ -50,39 +48,34 @@ class ExtractRep:
 
         return np.stack([vx, vy, obstacle_mask], axis=0)
 
-    def preprocessing_for_mae(self, vx_vy_list):
+    def preprocessing_for_tae(self, vx_vy_list):
         vx_vy_tensor = torch.tensor(vx_vy_list)
-        vx_vy_tensor = F.interpolate(vx_vy_tensor, size=(224, 224), mode='bilinear', align_corners=False)     #120,3,224,224
+        vx_vy_tensor = F.interpolate(vx_vy_tensor, size=(128, 128), mode='bilinear', align_corners=False)     #120,3,512,512
         return vx_vy_tensor    
     
-    def extract_latent_rep(self, flow_dir, rzn, return_type='cpu'):
-        # m = re.search(r'\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+_\w+', flow_dir)
-        # flow_dir_new = flow_dir[:m.end()]
-        # dummy_dir = flow_dir_new
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.mae.to(device)
-        # device = torch.device("cpu")
+    def extract_latent_rep(self,tae, flow_dir, rzn, return_type='cpu'):
+        # device = torch.device("cuda" if torch.cuda.is_available() and return_type=='gpu' else "cpu")
+        # device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
+        # self.tae.to(device)
         vx_vy_list = []
         vel_data = self.load_velocity(flow_dir) # Shape (list) : [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
         for t in range(vel_data[2].shape[0]): # Extract velocity over all timesteps
             temp = self.extract_velocity(vel_data, t, rzn)
             vx_vy_list.append(temp)
         vx_vy_array = np.array(vx_vy_list) # Shape (array) : (120, 3, 100, 100) 
-        preprocessed_vx_vy = self.preprocessing_for_mae(vx_vy_array) # torch.Size([120, 3, 224, 224]) (tensor)
-        self.mae.eval()
+        preprocessed_vx_vy = self.preprocessing_for_tae(vx_vy_array) # torch.Size([120, 3, 128, 128]) (tensor)
+
+        tae.eval()
         with torch.no_grad():
-            #loss = self.mae(preprocessed_vx_vy_list.to(device))
-            # latent_reps = self.mae(preprocessed_vx_vy.to(device),loss=False)
-            # shape = latent_reps.shape
-            # latent_reps = torch.reshape(latent_reps, (shape[0],-1))
-            outputs = self.mae(preprocessed_vx_vy.to(device))
-            latent_reps = outputs.hidden_states
+            outputs_encoder = tae.return_only_enc(preprocessed_vx_vy)  #.to(device))
+            latent_reps = outputs_encoder.view(120, -1) # Take mean across second dimension and flatten (120, 4, 16, 16) -> (120, 1024)
             # print(latent_reps[4][:,0].shape) # Verified using self.mae.vit.embeddings(preprocessed_vx_vy)[0][0,0,0:10] and latent_reps[0][0,0,0:10]
-        
+    
         if return_type =='cpu':
-            return latent_reps[4][:,0].cpu() #shape (120, rep_dim) 
+            return latent_reps.cpu() #shape (120, rep_dim) 1024
         else:
-            return latent_reps[4][:,0]
+            return latent_reps
+        
         
     
 
@@ -94,18 +87,18 @@ if __name__ == "__main__":
     gather_name = "1_100_2L_withr"
     gather_dir = os.path.join(ROOT, f"Gathered_datasets/gathered_{gather_dir_name}")
     traj_dataset = load_pkl(os.path.join(gather_dir, f"gathered_{gather_name}.pkl"))
-    # cfg_name = '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/cfg/contGrid_v5_GenHW.yaml'
-    # cfg_name = '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/cfg/contGrid_v5_GPT_DG3.yaml'
-    # cfg = read_cfg_file(cfg_name=cfg_name)
-    # mae_model_name = cfg['mae_model_name']
-    # mae_model_name="/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/mae_logs/GPT_MAE/Sept23_100envs_cosw_randomr_hs/Bestuned_fbMae_Model_5000D_1000E.pt"
-    # mae_model_name ="/media/HDD/rohit/Translation_transformer/my-translat-transformer/mae_logs/GPT_MAE/Sept23_100envs_cosw_randomr_hs/Bestuned_fbMae_Model_5000D_1000E.pt"
-    # mae_model_name ="/media/HDD/rohit/Translation_transformer/my-translat-transformer/mae_logs/GPT_MAE/Sept23_100envs_cosw_randomr_hs_168E/Bestuned_fbMae_Model_5000D_168E.pt"
-    mae_model_name = "/media/HDD/rohit/Translation_transformer/my-translat-transformer/mae_logs/GPT_MAE/Sept23_100envs_cosw_randomr_hs_1000E/Bestuned_fbMae_Model_5000D_1000E.pt"
-    mae = torch.load(mae_model_name)
-    model_name = mae_model_name[:-3].split('/')[-1]
     
-    extract_rep = ExtractRep(traj_dataset, mae)
+    device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
+    # tae = TAESD()
+    model_name = 'tiny_autoencoder'
+    tae_model_name = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tiny_ae_logs/Nov23_100envs_clr_randomr/finetuned_tinyautoenc_500D_100E/arch.pt"
+    tae = torch.load(tae_model_name).to(device)
+    model_state_dict_path = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tiny_ae_logs/Nov23_100envs_clr_randomr/finetuned_tinyautoenc_500D_100E/best_vloss.pt"
+    tae.load_state_dict(torch.load(model_state_dict_path)['model_state_dict'])
+    
+    # tae.to(device)
+    
+    extract_rep = ExtractRep(traj_dataset, tae)
     save_dir = os.path.join(ROOT, f"Gathered_datasets/gathered_{gather_dir_name}")
     save_name = os.path.join(save_dir, f"gathered_rep_{gather_name}_{model_name}.pkl")   
     # save_interval = len(traj_dataset)/10
@@ -114,7 +107,8 @@ if __name__ == "__main__":
     print(len(traj_dataset))
     for idx in range(len(traj_dataset)):
         _, _, _, _, _,_, _, _, _, _, flow_dir, rzn = traj_dataset[idx] 
-        Yi_r = extract_rep.extract_latent_rep(flow_dir,rzn)
+        gc.collect()
+        Yi_r = extract_rep.extract_latent_rep(tae, flow_dir,rzn, return_type='cpu')
         print(idx)
         print(Yi_r.shape)
         traj_dataset[idx][0] = Yi_r

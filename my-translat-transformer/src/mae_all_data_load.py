@@ -47,7 +47,7 @@ def load_vel(data_path, config):
 
     # all_Yi = all_Yi[a:b:gt, :trzn:100] 
     
-    random_indices = np.random.choice(all_Yi.shape[1], 50, replace=False)
+    random_indices = np.random.choice(all_Yi.shape[1], 5, replace=False)
     all_Yi = all_Yi[a:b:gt, random_indices, :]
 
     global nT___, nR___
@@ -108,8 +108,8 @@ class VelocityDataset(Dataset):
         im_tensor = im_tensor.unsqueeze(0)  # Add batch dimension
         im_tensor = F.interpolate(im_tensor, size=(sz, sz), mode='bilinear', align_corners=False)     # 1,2,256,256
         im_tensor = im_tensor.squeeze(0)  # Remove batch dimension              
-        
-        return im_tensor   
+        # im_tensor_ = torch.tensor(im_tensor, requires_grad=True)
+        return im_tensor
     
     
 def plot_vel_field(vx_grid, vy_grid, obs_mask, g_strmplot_lw=1, g_strmplot_arrowsize=1, flow_name="", path=""):
@@ -129,7 +129,58 @@ def plot_vel_field(vx_grid, vy_grid, obs_mask, g_strmplot_lw=1, g_strmplot_arrow
     v_mag_grid = (vx_grid**2 + vy_grid**2)**0.5
     im = plt.contourf(X, Y, v_mag_grid, cmap = "Blues", alpha = 0.9, zorder = -1e5)
 
-    plt.savefig(path+flow_name+".png")
+    if not (flow_name=="" and path==""):
+        plt.savefig(path+"/"+flow_name+".png")
+    return im  
+
+def plot_vel_imshow(vx_grid, vy_grid, obs_mask, g_strmplot_lw=1, g_strmplot_arrowsize=1, flow_name="", path=""):
+    # Make modes the last axis
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.set_aspect('equal', adjustable='box')
+
+    # Scale values to lie between 0 - 1
+    # min_v = -5 # -10 
+    # max_v = 5 #10
+    # min_sd = -7
+    # max_sd = 89
+    # vx_grid = (vx_grid - min_v) / (max_v - min_v)
+    # vy_grid = (vy_grid - min_v) / (max_v - min_v)
+    # obs_mask = (obs_mask - min_sd) /(max_sd - min_sd)
+    vx_grid = np.flipud(vx_grid)
+    vy_grid = np.flipud(vy_grid)
+    xlim, ylim = vx_grid.shape
+    Xs = np.arange(0,xlim) + 0.5
+    Ys = np.arange(0,ylim) + 0.5
+    X,Y = np.meshgrid(Xs, Ys)
+    # plt.streamplot(X, Y, vx_grid, vy_grid, color = 'grey', zorder = 0,  linewidth=g_strmplot_lw, arrowsize=g_strmplot_arrowsize, arrowstyle='->')
+    im = plt.imshow(np.stack([vx_grid,vy_grid,obs_mask.numpy()], axis=2))
+    # v_mag_grid = (vx_grid**2 + vy_grid**2)**0.5
+    # im = plt.contourf(X, Y, v_mag_grid, cmap = "Blues", alpha = 0.9, zorder = -1e5)
+
+    if not (flow_name=="" and path==""):
+        plt.savefig(path+"/"+flow_name+".png")
+    return im    
+
+def plot_vel_field_decoder(ax, vx_grid, vy_grid, obs_mask, g_strmplot_lw=1, g_strmplot_arrowsize=1, flow_name="", path="", title_name=''):
+    # Make modes the last axis
+    # fig = plt.figure()
+    # ax = fig.add_subplot(111)
+    ax.set_aspect('equal', adjustable='box')
+
+    vx_grid = np.flipud(vx_grid)
+    vy_grid = np.flipud(vy_grid)
+    xlim, ylim = vx_grid.shape
+    Xs = np.arange(0,xlim) + 0.5
+    Ys = np.arange(0,ylim) + 0.5
+    X,Y = np.meshgrid(Xs, Ys)
+    ax.streamplot(X, Y, vx_grid, vy_grid, color = 'grey', zorder = 0,  linewidth=g_strmplot_lw, arrowsize=g_strmplot_arrowsize, arrowstyle='->')
+    ax.imshow(obs_mask, origin='lower', alpha=0.7)
+    v_mag_grid = (vx_grid**2 + vy_grid**2)**0.5
+    im = ax.contourf(X, Y, v_mag_grid, cmap = "Blues", alpha = 0.9, zorder = -1e5)
+    ax.set_title(title_name)
+    if not (flow_name=="" and path==""):
+        plt.savefig(path+"/"+flow_name+".png")
     return im  
 
 # def func_show_obstacles(t, obs_mask_mat, g, gsize):

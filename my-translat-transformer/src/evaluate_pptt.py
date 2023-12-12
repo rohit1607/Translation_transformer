@@ -16,27 +16,194 @@ import sys
 import pickle
 import wandb
 import imageio.v2 as imageio
-import time
 import argparse
 from os.path import join
 from datetime import datetime
 import numpy as np
 from root_path import ROOT
-from transformers import get_cosine_with_hard_restarts_schedule_with_warmup
 from PIL import ImageFile
+sys.path.append("/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer")
+from extract_rep_3channel import ExtractRep
+import tqdm
+import matplotlib.pyplot as plt
+tmp_path='/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tmp'
+
+def predict_env_embeddings_autoreg(env_predictor, env_pred_input, timesteps, input_mask, t, cl):
+    """
+    env_predictor: model
+    t: timestep to start prediction from
+    cl:  context len
+    env_pred_input: input tensor of env embeddings contain observed embeddings till timestep t
+    input_mask: mask with padding 
+
+    env_pred_input itself is updated with predictions.
+    when returning, env_pred_input[0,0:t+1,:] has observed embeddings
+                    env_pred_input[0, t+1:,:] has predicted embeddings
+    it can be directly used as the dyn_encoder_input for the pptt encoder
+    """ 
+
+    for p in range(t+1, cl-1):
+        input_mask[0,p-1] = False
+        ag_pred_at_p = env_predictor(timesteps, env_pred_input, padding_mask=input_mask)[0,p-1]
+        env_pred_input[0,p,:] = ag_pred_at_p
+
+    return env_pred_input
+
+def closed_loop_tranlsate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, cfg, autoenc, env_predictor, earlybreak=10**8):
+    model.eval()
+    count = 0           # keeps count of total episodes
+    success_count = 0   # keeps count of successful episodes
+    op_traj_dict_list = []
+    total_reward = 0
+    states_mean, states_std = tr_set_stats
+    states_mean = torch.from_numpy(states_mean).to(cfg.device)
+    states_std = torch.from_numpy(states_std).to(cfg.device)
+    eps = 1e-6
+    cl = cfg.context_len
+    device = cfg.device
+    # extractor = ExtractRep(None, autoenc)
+
+    with torch.no_grad():
+        for _, (timesteps, actions, states, rtg, action_mask, final_pos, encoder_input_labels, tgt_padding_mask, n, idx, flow_dir, rzn) in enumerate(tqdm.tqdm(test_dataloader)):
+            # if idx%100==0:
+            #     print(idx)
+            states = states.to(device)
+            obs_embs = encoder_input_labels.to(device) # these are observed at each timestep
+            final_pos = final_pos.to(device)
+            timesteps = timesteps.to(device)
+            op_traj_dict = {}
+            reached_target = False
+
+            # set up environment
+            flow_dir = flow_dir[0]
+            env = setup_env(flow_dir)
+            env.reset()
+            env.set_rzn(rzn)
+
+            count += 1
+            if count == earlybreak:
+                break
+
+            # TODO: verify whether lenght should be cl 
+            pred_actions = torch.zeros_like(actions, device=device)
+            pred_states = torch.zeros_like(states, device=device)
+            pred_rtg = torch.zeros_like(rtg, device=device)
+            tgt_padding_mask = torch.ones_like(tgt_padding_mask).type(torch.bool).to(device)
+            env_predictor_padding_mask = torch.ones_like(timesteps).type(torch.bool).to(device)
+            # TODO: verify correctness of sequence length
+            dyn_encoder_input = torch.zeros_like(obs_embs, device=device) # [1, 123, 768]
+            env_predictor_input = torch.zeros_like(obs_embs)
+
+            # TODO: start state can taken from cfg as well. Current is ok
+            # since not trying to generalize over start states
+            pred_states[0,0,:] = (states[0,0,:] - states_mean) / (states_std + eps)
+            # TODO: might have to not condition on desired rtg if doesnt work well
+            running_rtg = cfg.desired_rtg  / cfg.rtg_scale 
+            pred_rtg[0,0,0] = running_rtg  # scaled
+            episode_returns = 0
+            running_state = np.array(env.reset())
 
 
-class jugaad_cfg:
-    def __init__(self, context_len, device):
-        self.context_len = context_len
-        self.device = device
+            for t in range(0, cl):
+                if t < cl:
+                    # t=0: Xf R s           0:3
+                    # t=1: Xf R s a R s     0:6
+                    tgt_padding_mask[0, :3*(t+1)] = False
+                    #Reinitialise mask to all Trues
+                    env_predictor_padding_mask[0,:] = True
+                    env_predictor_padding_mask[0, :t+1] = False #shape [1,124]
+                    # TODO: can put in src_padding_mask for surity
+                    # return form src_util loader
+                    
+                    # get observed env embedding till time t and feed it to the tdec as input
+                    env_predictor_input[0,:t+1,:] = obs_embs[0,:t+1,:] #shape [1,123,1024]
+                    # -1 because timesteps in env_predictor start from 0
+                    # :cl because timesteps here range from 0:cl+1
+                    # IMP: train env_predictor with the same context len
+                    #  shape [1,123,1024]
+                    # env_predictor_pred = env_predictor(timesteps[:,:cl]-1, env_predictor_input[:,:cl], env_predictor_padding_mask[:,:cl])
+                    env_predictor_pred = predict_env_embeddings_autoreg(env_predictor,
+                                                                            env_predictor_input[:,:cl],         #shape [1,123,1024]
+                                                                            timesteps[:,:cl]-1,                 #shape [1,123]
+                                                                            env_predictor_padding_mask[:,:cl], #shape [1,123]
+                                                                            t,cl)
+                    
+                    # dyn_encoder_input[0,:t+1,:] = env_predictor_input[0,:t+1,:] 
+                    # dyn_encoder_input[0,t+1:,:] = env_predictor_pred[0,t+1:,:]
+                    # env_predictor_pred has both observed embeddings and predicted embeddings
+                    dyn_encoder_input[0,:,:] = env_predictor_pred[0,:,:]
+                    # plt.ylim([0.4,0.8])
+                    # plt.plot(dyn_encoder_input[0,:t+1,0].cpu().numpy(),'--o')
+                    # plt.plot(dyn_encoder_input[0,:20,0].cpu().numpy(),'-*')
+                    # plt.savefig(join(tmp_path,'test_dyn_enc_ip.png'))
+
+                    _pred_actions_ = model.forward( src=dyn_encoder_input,
+                                                    tgt_states=pred_states,
+                                                    tgt_actions=pred_actions,
+                                                    tgt_rtg=pred_rtg,
+                                                    tgt_final_pos=final_pos,
+                                                    src_mask=None,
+                                                    tgt_mask=generate_square_subsequent_mask(model.max_dec_len, device),
+                                                    src_padding_mask=None,
+                                                    tgt_padding_mask=tgt_padding_mask,
+                                                    memory_key_padding_mask=None,
+                                                    timesteps=timesteps,
+                                                    )
+                 
+                    act = _pred_actions_[0, t].detach()
+                else:
+                    # TODO: complete later or remove if-else condition
+                    raise ValueError("case should be impossible")
+     
+                running_state, running_reward, done, info = env.step(act.cpu().numpy()*2*np.pi)
+                running_state = torch.from_numpy(running_state).to(device)
+                # add action in placeholder
+                pred_actions[0, t] = act
+                pred_states[0, t+1] = (running_state - states_mean) / (states_std + eps)
+                running_rtg = running_rtg - (running_reward / cfg.rtg_scale)
+                pred_rtg[0,t+1,0] = running_rtg   # scaled
+               
+                total_reward += running_reward
+                episode_returns += running_reward
+
+                if done:
+                    t_done = t + 1
+                    # if done and getting positive reward
+                    if running_reward > 0: 
+                        reached_target = True
+                        success_count += 1
+                    break
+                # end_fp = time.time()
+                # print(f"rebuttal: forward pass time: {end_fp - start_fp}")
+
+            op_traj_dict['states'] = states.cpu() # normalized
+            op_traj_dict['actions'] = actions.cpu()*2*np.pi
+            op_traj_dict['t_done'] = t_done
+            op_traj_dict['n_tsteps'] = t+2
+            op_traj_dict['success'] = reached_target
+            # op_traj_dict['mse'] = mse
+            # op_traj_dict['all_att_mat'] = extract_attention_scores(model)
+            # op_traj_dict['states_for_action_labels'] = None
+            # op_traj_dict['action_labels'] = tgt.cpu()*2*np.pi
+
+            # op_traj_dict['success_fal'] = reached_target_
+            op_traj_dict_list.append(op_traj_dict)
 
 
-def closed_loop_tranlsate():
-    return
+
+    # mean_translate_time = np.mean(np.array(translate_one_rzn_list)[1:101])
+    # print(f'Avg translate time for 100 rzns: {mean_translate_time}')
+    # print(np.array(translate_one_rzn_list)[1:101].shape)
+    results = {}
+    # results['avg_val_loss'] = np.mean([d['mse'] for d in op_traj_dict_list])
+    results['translate/avg_ep_len'] = np.mean([d['n_tsteps'] for d in op_traj_dict_list])
+    results['translate/success_ratio'] = success_count / count
+    results['runs_from_set(count)'] = count
+    return op_traj_dict_list, results
+    
 
 
-def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, cfg, envDecoder=None, earlybreak=10**8):
+def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, cfg, earlybreak=10**8):
     model.eval()
     count = 0           # keeps count of total episodes
     success_count = 0   # keeps count of successful episodes
@@ -81,12 +248,18 @@ def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, c
             
             # TODO: start state can taken from cfg as well. Current is ok
             # since not trying to generalize over start states
-            pred_states[0,0,:] = (states[0,0,:] - states_mean) / (states_std + eps)
+            #
+            # states is arleady normalized in the dataloader
+            pred_states[0,0,:] = states[0,0,:]
             # TODO: might have to not condition on desired rtg if doesnt work well
             running_rtg = cfg.desired_rtg  / cfg.rtg_scale 
             pred_rtg[0,0,0] = running_rtg  # scaled
             episode_returns = 0
-            running_state = np.array(env.reset())
+            env.reset()
+            # for debuggimg
+            dss = torch.from_numpy(np.array(env.reset())).to(device)
+            dss = (dss - states_mean) / (states_std + eps)
+            assert(torch.all(dss == pred_states[0,0]).item()), "state[0,0] !=  env.reset() "
             # TODO: IMPPP! is running state in the above line same as
             # states[0,0,:] # SHUBHAM
 
@@ -285,7 +458,7 @@ def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, c
 
 """
 TODO:
-0. save to same wandb run as used in train (high)
+0. save to same wandb run as used in train (high) DONE
 1. Make args for running inference on train, test, val sets with tt_eb from cfg (low)
 2. override tt_eb from cfg using cmd line args (low)
 4. fix paper_plots for pptt
@@ -326,11 +499,27 @@ class inference:
         results_path = join(dataset_subdir, args.model_state[:-3]) # remove .pt
         make_dir(results_path, exist_ok=True) # overwrites folder 
 
+        device = torch.device(cfg.device)
+
         with open(dataset_path, 'rb') as f:
             traj_dataset = pickle.load(f)
 
-        mae = torch.load(cfg.mae_model_name)
-
+        if hasattr(cfg, 'mae_model_name'):
+            autoenc = torch.load(cfg.mae_model_name)
+            ae_type = 'mae'
+        elif hasattr(cfg, 'tae_model_arch'):
+            # autoenc = torch.load(cfg.tae_model_arch)
+            # autoenc.load_state_dict(torch.load(cfg.tae_state_dict))
+            from finetune_tinyautoencoder import TAESD, Clamp, Block, conv, Encoder, Decoder
+            autoenc = TAESD()
+            ae_type = 'tae'
+        else:
+            raise ValueError("Invalide cfg keys for autoencoder")   
+        
+        
+        env_predictor = torch.load(f"/{join(*cfg.env_predictor_name.split('/')[:-1])}/arch.pt")
+        env_predictor.load_state_dict(torch.load(cfg.env_predictor_name)['model_state_dict'])
+        
         idx_split, set_split = get_data_split(traj_dataset,
                                             split_ratio=self.split_ratio, 
                                             random_seed=cfg.split_ran_seed, 
@@ -342,9 +531,11 @@ class inference:
         us_test_traj_set = create_envEnc_dtDec_dataset(us_test_traj_set, 
                                 [None],
                                 cfg.context_len,
-                                mae,
+                                autoenc,
                                 cfg.rtg_scale,
-                                norm_params_4_val = states_stats)
+                                norm_params_4_val = states_stats,
+                                ae_type=ae_type,
+                                device=device)
         self.test_dataloader = DataLoader(us_test_traj_set, batch_size=1, shuffle=True)
 
         self.dataset_path = dataset_path
@@ -355,10 +546,12 @@ class inference:
         self.states_stats =states_stats
         self.us_test_traj_set = us_test_traj_set
         self.dset = 'test' # hard coded. TODO: 
+        self.autoenc = autoenc
+        self.env_predictor = env_predictor
 
 
 
-    def load_and_translate(self):
+    def load_and_translate(self,closed_loop_translation=True):
 
         args = self.args
         cfg = self.cfg
@@ -372,19 +565,20 @@ class inference:
         transformer.load_state_dict(torch.load(model_state_dict_path)['model_state_dict'])
 
         # TODO: save to same wandb run as used in train (Shubham)
-        # wandb.init(id = cfg['wb_id'], resume=True)
-        # wandb.log({'test': 100})
+        wandb.init(project = "envEnc_dtDec",id = cfg.wb_id, resume=True)
+        wandb.log({'test': 100})
 
-        # TODO: delete commented block if not needed
-        # test_idx_set = None #TODO: clean unneeded vars and args
-        # # read cfg not working and requires postprocessing 
-        # # cfg_path =  tmp_path[:-3] + ".yml"
-        # # cfg =  read_cfg_file(cfg_path)
-        # cfg = jugaad_cfg(context_len=120, device='cuda')
-        # # translate_start_time = timer()
-
-        op_traj_dict_list, results = translate(transformer,None, self.test_dataloader, 
-                                                self.states_stats, cfg, earlybreak=10)
+        print(f"\n----- {closed_loop_translation=} ------\n")
+        if closed_loop_translation:
+            op_traj_dict_list, results = closed_loop_tranlsate(transformer,None, self.test_dataloader, 
+                                                self.states_stats, cfg, 
+                                                autoenc=self.autoenc,
+                                                env_predictor=self.env_predictor,
+                                                earlybreak=10)
+        else:
+            op_traj_dict_list, results = translate(transformer,None, self.test_dataloader, 
+                                                    self.states_stats, cfg, earlybreak=10)
+                   
         # TODO: remove hardcode
         # translate_end_time = timer()
         # print(f"Translate runtime = {(translate_end_time - translate_start_time):.3f}s")
@@ -404,6 +598,7 @@ class inference:
         dummy_flow_dir = self.us_test_traj_set[0][-2]
         # intantiate gym env for vizualization purposes
         env_4_viz = setup_env(dummy_flow_dir)
+        obs_mask = np.load(join(dummy_flow_dir, "obstacle_mask.npy"))
 
         states_mean, states_std = self.states_stats
         test_set_txy_preds = [d['states']*states_std + states_mean for d in op_traj_dict_list]
@@ -424,12 +619,14 @@ class inference:
                         "loss_avg_returns":{"fname":"loss"},
                         "vel_field":{"fname":"vel_field", "ts":[1,60,119]}
                             }
-        
+
         pp = paper_plots(env_4_viz, op_traj_dict_list, self.states_stats,
                             paper_plot_info=paper_plot_info,
-                            save_dir=self.results_path)
+                            # save_dir=join(self.results_path, "temp_test")
+                            save_dir=self.results_path 
+                            )
         
-        pp.plot_val_ip_op(self.us_test_traj_set, test_set_txy_preds, path_lens, success_list)
+        pp.plot_val_ip_op(self.us_test_traj_set, obs_mask[1,:], test_set_txy_preds, path_lens, success_list)
 
         return
 
@@ -512,7 +709,8 @@ if __name__ == "__main__":
 
     # log/exp_dir cotains model, train config, saved_states
     # plots from translate will be stored in the same dir
-    def_log_exp_dir = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_GPT_DG3_model_10-30-15-12-47"
+    # def_log_exp_dir = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_GPT_DG3_model_10-30-15-12-47"
+    def_log_exp_dir = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_GPT_DG3_model_12-04-17-05-45"
     
     print(f"cuda available: {torch.cuda.is_available()}")
     parser = argparse.ArgumentParser()

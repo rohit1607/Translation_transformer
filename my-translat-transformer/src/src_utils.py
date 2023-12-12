@@ -20,13 +20,18 @@ import sys
 import time
 import re
 from pathlib import Path
-from utils import read_cfg_file
+from utils import read_cfg_file, execution_time
 import gym
 import gym_examples
+import matplotlib
 sys.path.append("/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer")
-from extract_rep_3channel import ExtractRep
+# from extract_rep_3channel import ExtractRep as ExtractRep_mae
+from extract_rep_3channel_ae import ExtractRep as ExtractRep_tae
 
 
+@execution_time
+def get_next_item(loader):
+    return next(loader)
 
 def setup_env(flow_dir):
     flow_specific_cfg = read_cfg_file(cfg_name=join(flow_dir,"cfg_used_in_proc_data.yml"))
@@ -61,6 +66,8 @@ def checkpoint_model(model, save_dir, epoch, optimizer,
         save_path = join(save_dir, f"best_vloss.pt")
     elif save_type == "some_epoch":
         save_path = join(save_dir, f"ep{epoch}.pt")
+    elif save_type == 'cur_best_translation':
+        save_path = join(save_dir, f"best_translation_loss.pt")
     torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
@@ -160,7 +167,6 @@ class create_waypoint_dataset(Dataset):
     def __len__(self):
         return len(self.dataset)
         
-
     def __getitem__(self, idx):
         traj = self.dataset[idx]
         traj_len = traj['states'].shape[0]
@@ -986,7 +992,7 @@ class create_env_emb_dataset(Dataset):
         
 
     def __getitem__(self, idx):
-        env_reps, _, _, _, _, _, _,_,_, flow_dir, rzn = self.dataset[idx]
+        env_reps, _, _, _,_, _, _, _,_,_, flow_dir, rzn = self.dataset[idx]
         padding_len = None
         traj_len = len(env_reps)
         if traj_len > self.context_len:
@@ -1019,10 +1025,12 @@ class create_envEnc_dtDec_dataset(Dataset):
     def __init__(self, dataset, 
                         idx_set,
                         nT, # contextl len
-                        mae,
+                        autoenc,
                         rtg_scale,
+                        ae_type = 'tae',
                         norm_params_4_val=None,
-                        LN=False):
+                        LN=False,
+                        device = 'cpu'):
         """
         derived from create_action_dataset_v4
         for creating dataset in train_pptt.py
@@ -1039,8 +1047,15 @@ class create_envEnc_dtDec_dataset(Dataset):
 
         Note: Written for a particular env field
         """
-        
-        self.extractor = ExtractRep(None, mae)
+        if ae_type == 'tae':
+            print(" ----- \n Using *TAE* to create embeddings \n ---")
+            self.extractor = ExtractRep_tae(None, autoenc) 
+        elif ae_type == 'mae':
+            print(" ----- \n Using *MAE* to create embeddings \n ---")
+            self.extractor = ExtractRep_mae(None, autoenc)
+        else:
+            raise ValueError("invalid extractor class")
+        self.autoenc = autoenc.to(device)
         self.nT = nT
         self.enc_max_len = nT
         self.dec_max_len = 3*(nT) + 1
@@ -1066,7 +1081,8 @@ class create_envEnc_dtDec_dataset(Dataset):
         
     def get_states_stats(self):
         return self.states_mean, self.states_std
-
+    
+    # @execution_time #0.085  secs
     def __getitem__(self, idx):
         # Yi_r, obs_r, actions_r, states_r, timesteps_r, rewards_r, dones_r, success_r, 
         # target_pos_r, start_pos_r, flow_dir, rzn 
@@ -1085,8 +1101,10 @@ class create_envEnc_dtDec_dataset(Dataset):
         # dec_io_seq_len = 3*n + 1 #  x0 - {RSA}*n - 0
         
         # encoder input
-        encoder_input = self.extractor.extract_latent_rep(flow_dir,rzn,return_type='gpu')  #(120,d=768)
-            
+        # start_time = time.time()
+        encoder_input = self.extractor.extract_latent_rep(self.autoenc, flow_dir,rzn,return_type='gpu')  #(120,d=768)
+        # end_time = time.time()
+        # print(f"in datasetcreator, mae extraction time = {(end_time - start_time)/60} mins")
         # Layer normalization
         # TODO: Try with and without
         if self.LN:
@@ -1631,8 +1649,12 @@ def visualize_input(traj_dataset,
         wandb.log({wandb_fname: wandb.Image(fname)})
     #plt.cla()
 
-def see_steplr_trend(step_size: int, num_epochs: int, lr=0.001, final_lr=None, gamma=None, show_plot=False):
-    nsteps = int(num_epochs/step_size)
+def see_steplr_trend(step_size: int, num_epochs: int, lr=0.001, final_lr=None, update_inside_epoch = False, len_tr_set=None, gamma=None, show_plot=False):
+    if update_inside_epoch:
+        nsteps = int(num_epochs*len_tr_set/step_size)
+    else:
+        nsteps = int(num_epochs/step_size)
+        
     lr = lr
     if gamma == None and final_lr != None:
         final_lr = final_lr
@@ -1649,10 +1671,8 @@ def see_steplr_trend(step_size: int, num_epochs: int, lr=0.001, final_lr=None, g
     if show_plot:
         plt.yscale("log")  
         plt.plot(y)
-        plt.show()
-
+        plt.savefig(f'/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tmp/stepLR.png')
     return gamma, final_lr
-
 
 
 def plot_attention_weights(weight_mat, 
@@ -2161,3 +2181,33 @@ class create_dt_dataset_v2(Dataset):
         # target_state = np.insert(target_state,0,dummy_t,axis=0)
         # return timesteps, states, actions, returns_to_go, traj_mask, target_state
         return timesteps, actions, traj_mask, target_pos, states, traj_len, idx, flow_dir, rzn, returns_to_go, obs
+    
+    
+def plot_grad_flow(named_parameters):
+    '''Plots the gradients flowing through different layers in the net during training.
+    Can be used for checking for possible gradient vanishing / exploding problems.
+
+    Usage: Plug this function in Trainer class after loss.backwards() as 
+    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
+    ave_grads = []
+    max_grads= []
+    layers = []
+    for n, p in named_parameters:
+        if(p.requires_grad) and ("bias" not in n):
+            layers.append(n)
+            ave_grads.append(p.grad.abs().mean().item())
+            max_grads.append(p.grad.abs().max().item())
+    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
+    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
+    plt.hlines(0, 0, len(ave_grads)+1, lw=2, color="k" )
+    plt.xticks(range(0,len(ave_grads), 1), layers, rotation="vertical")
+    plt.xlim(left=0, right=len(ave_grads))
+    plt.ylim(bottom = -0.001) # zoom in on the lower gradient regions
+    plt.xlabel("Layers")
+    plt.ylabel("average gradient")
+    plt.title("Gradient flow")
+    plt.grid(True)
+    plt.legend([matplotlib.lines.Line2D([0], [0], color="c", lw=4),
+                matplotlib.lines.Line2D([0], [0], color="b", lw=4),
+                matplotlib.lines.Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
+    plt.savefig('/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tmp/grads.png')

@@ -36,7 +36,7 @@ class paper_plots:
         self.plot_att_heatmap()
 
 
-    def plot_vel_field(self,ax, t,r=0, g_strmplot_lw=1, g_strmplot_arrowsize=1):
+    def plot_vel_field(self,ax, obs_mask, t,r=0, g_strmplot_lw=1, g_strmplot_arrowsize=1):
         # Make modes the last axis
         Ui = np.transpose(self.env.Ui,(0,2,3,1))
         Vi = np.transpose(self.env.Vi,(0,2,3,1))
@@ -49,10 +49,14 @@ class paper_plots:
         X,Y = np.meshgrid(Xs, Ys)
         ax.streamplot(X, Y, vx_grid, vy_grid, color = 'grey', zorder = 0,  linewidth=g_strmplot_lw, arrowsize=g_strmplot_arrowsize, arrowstyle='->')
         v_mag_grid = (vx_grid**2 + vy_grid**2)**0.5
-        im = ax.contourf(X, Y, v_mag_grid, cmap = "Blues", alpha = 0.5, zorder = -1e5)
+        v_mag_grid[np.where(obs_mask==1)]=np.nan
+        ax.contourf(X, Y, v_mag_grid, alpha = 0.9, zorder = -1e5, colors='white')
+        ax.set_facecolor("grey") 
+        im = ax.contourf(X, Y, v_mag_grid, cmap = "Blues", alpha = 0.9, zorder = -1e5)
+        # ax = plt.gca()
+        # ax.set_facecolor('grey')
         return im
-
-    
+        
 
     def plot_traj_by_arr(self, traj_dataset, set_str=""):
         info = self.paper_plot_info["trajs_by_arr"]
@@ -101,28 +105,9 @@ class paper_plots:
         save_name = join(self.save_dir,fname)
         plt.savefig(save_name, bbox_inches = 'tight', dpi=600)
         return ax
-
-    def f(self, obs_token):
-
-        ru,cl,w = obs_token
-        w = w*100
-        y_l = 100*(1-ru) + 0.5 + w
-        x_l = 100*cl - 0.5
-        return x_l, y_l, w
     
-    def plot_obstacle(self, ax, obs_token=None, xyw=None):
-        if obs_token != None:
-            x_ll, y_ll, w = self.f(obs_token)
-        elif xyw != None:
-            x_ll, y_ll, w = xyw
-        else:
-            raise ValueError('provide iether token or xyw')
-        rect = patches.Rectangle((x_ll, y_ll), w, w, linewidth=1, edgecolor='k', facecolor='grey')
-        ax.add_patch(rect)
-        return
         
-        
-    def plot_val_ip_op(self, traj_dataset,
+    def plot_val_ip_op(self, traj_dataset, obs_mask,
                        preds_list,
                        path_lens,
                        success_list,
@@ -133,29 +118,22 @@ class paper_plots:
         
         ip_states_list =[item[3] for item in traj_dataset.dataset] # scale in 100
         ip_path_lens = [len(item[2]) for item in traj_dataset.dataset] #item[2]
-        vmin = min(path_lens + ip_path_lens)
-        vmax = max(path_lens + ip_path_lens)
-        # vmax = min(vmax, 99)
-        # vmax = int(41)
-        # vmin = int(6)
-        # # vmax = 51
+        # vmin = min(path_lens + ip_path_lens)
+        # vmax = max(path_lens + ip_path_lens)
+        vmin = min(ip_path_lens)
+        vmax = max(ip_path_lens)
 
         # Make a user-defined colormap.
         cNorm = colors.Normalize(vmin=vmin, vmax=vmax)
         cmap = plt.get_cmap('YlOrRd')
         sm = cm.ScalarMappable(norm=cNorm, cmap=cmap)
-        
-        # Works for static obstacle only
-        obs_token = traj_dataset.dataset[0][1][0] #sample, obstacle key, timestep
-        xyw=(-10,-10,5)
+
 
         ax = axs[0]
         self.setup_ax(ax)       
-        im = self.plot_vel_field(ax,t=vmax,r=499)
-        # TODO: Fix this for polygon obstacles
-        self.plot_obstacle(ax, xyw=xyw)
-        # traj_dataset=random.shuffle(traj_dataset)
-
+        im = self.plot_vel_field(ax, obs_mask, t=vmax,r=499)
+   
+        
         for idx,traj in enumerate(ip_states_list):
             states = ip_states_list[idx]
             t_done = ip_path_lens[idx]
@@ -170,9 +148,7 @@ class paper_plots:
         pr_t_dones = []
         ax = axs[1]
         self.setup_ax(ax, show_ylabel=False)
-        im = self.plot_vel_field(ax,t=vmax,r=499)
-        # TODO: Fix this
-        self.plot_obstacle(ax, xyw=xyw)
+        im = self.plot_vel_field(ax,obs_mask,t=vmax,r=499)
 
         for idx, traj in enumerate(preds_list):
             states = preds_list[idx]
@@ -212,6 +188,8 @@ class paper_plots:
         fname = info["fname"] 
         save_name = join(self.save_dir,fname)
         plt.savefig(save_name, bbox_inches = 'tight', dpi=600)
+
+
 
     def plot_actions(self, traj_dataset,
                        preds_list,

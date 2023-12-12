@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 # import seaborn as sns
 import sys
-
+from src_utils import generate_square_subsequent_mask
 
 class MaskedCausalAttention(nn.Module):
     def __init__(self, h_dim, max_T, n_heads, drop_p):
@@ -219,12 +219,6 @@ class DecisionTransformer(nn.Module):
 
         return state_preds, action_preds, return_preds
     
-    
-    
-    
-
-
-
 
 class Transformer_decoder(nn.Module):
     
@@ -278,3 +272,42 @@ class Transformer_decoder(nn.Module):
        
         return env_preds
     
+    
+class Transformer_causal_encoder(nn.Module):
+    def __init__(self, inp_dim, n_blocks, emb_dim, context_len, n_heads, drop_p=0.1, ff_dim=None, device='cpu'):
+        super().__init__()
+        self.inp_dim = inp_dim
+        self.n_blocks = n_blocks
+        self.emb_dim = emb_dim
+        self.context_len = context_len
+        self.n_heads = n_heads
+        self.drob_p = drop_p
+        self.ff_dim = ff_dim if ff_dim is not None else context_len*4
+        self.embed_timestep = nn.Embedding(context_len, emb_dim)
+        self.embed_inp = nn.Linear(inp_dim, emb_dim)
+        self.enc_layer = torch.nn.TransformerEncoderLayer(d_model=emb_dim,
+                                                          nhead=n_heads,
+                                                          dim_feedforward=self.ff_dim,
+                                                          dropout=drop_p,
+                                                          activation='gelu',
+                                                          batch_first=True,
+                                                          )
+        self.model = torch.nn.TransformerEncoder(self.enc_layer, n_blocks)
+        self.predictor = nn.Linear(emb_dim, inp_dim)
+        self.causal_mask = generate_square_subsequent_mask(context_len, device)
+        
+    def forward(self, timesteps, src, padding_mask):
+        src_emb =  self.embed_inp(src) + self.embed_timestep(timesteps)
+        return self.predictor(self.model(src_emb, src_key_padding_mask=padding_mask, mask=self.causal_mask))
+    
+    
+    
+# from src_utils import generate_square_subsequent_mask
+# inp_dim, n_blocks, emb_dim, context_len, n_heads = 100, 1, 20, 100, 4
+# causal_mask = generate_square_subsequent_mask(context_len,'cpu')
+# tce =  Transformer_causal_encoder(inp_dim, n_blocks, emb_dim, context_len, n_heads)
+# src = torch.cat([torch.zeros(1,context_len//2, inp_dim), torch.ones(1,context_len//2, inp_dim)],axis=1)
+# timesteps = torch.range(0,context_len-1,1).type(torch.int32)
+# padding_mask = torch.zeros((1,context_len)).type(torch.bool)
+# outputs =  tce(src, timesteps, padding_mask, causal_mask)
+# print()

@@ -11,9 +11,15 @@ import torch.nn.functional as F
 import math
 from transformers import ViTMAEConfig, ViTMAEForPreTraining
 from transformers import ViTConfig, ViTModel
+from src_utils import generate_square_subsequent_mask
 
 
 import timm
+
+def generate_square_subsequent_mask(sz, device):
+    mask = (torch.triu(torch.ones((sz, sz), device=device)) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+    return mask
 
 # helper Module that adds positional encoding to the token embedding to introduce a notion of word order.
 class PositionalEncoding(nn.Module):
@@ -22,38 +28,37 @@ class PositionalEncoding(nn.Module):
                  dropout: float,
                  maxlen: int = 5000):
         super(PositionalEncoding, self).__init__()
-        den = torch.exp(- torch.arange(0, emb_size, 2)* math.log(10000) / emb_size)
+        den = torch.exp(- torch.arange(0, emb_size, 2)* math.log(1000) / emb_size)
         pos = torch.arange(0, maxlen).reshape(maxlen, 1)
         pos_embedding = torch.zeros((maxlen, emb_size))
-        # print(f"in posEnc.init emb_size = {emb_size}")
 
         pos_embedding[:, 0::2] = torch.sin(pos * den)
         pos_embedding[:, 1::2] = torch.cos(pos * den)
-        # pos_embedding = pos_embedding.unsqueeze(-2)
+        pos_embedding = pos_embedding.unsqueeze(0).transpose(0, 1)
 
         self.dropout = nn.Dropout(dropout)
         self.register_buffer('pos_embedding', pos_embedding)
 
     def forward(self, token_embedding: Tensor, timesteps: Tensor):
         # print(f"in posEnc.forward token_embedding.shape = {token_embedding.shape},\n self.pos_embedding.shape = {self.pos_embedding.shape}, {token_embedding.size(0)}")
-        emb = self.dropout(token_embedding + self.pos_embedding[:token_embedding.size(1), :])
+        emb = self.dropout(token_embedding + self.pos_embedding[:token_embedding.size(0), :])
         return emb
                                 # [64, 70, 8]            (70,8)
 
+# Position Encoding for PPTT, envEmbPredictor
 class SimplePositionalEncoding(nn.Module):
     def __init__(self, emb_size, max_len):
         super(SimplePositionalEncoding, self).__init__()
         self.pos_embedding = nn.Embedding(max_len, emb_size)
-        
-        # TO DO : Raj to check correctness
-        # emb_vec = emb_vec.detach().cpu().numpy()
-        # emb_vec = torch.from_numpy(emb_vec.reshape((-3,)+emb_vec.shape[:2]).transpose(1,2,0))
         
     def forward(self, emb_vec, timesteps):
         emb = self.pos_embedding(timesteps) + emb_vec
         # emb = self.pos_embedding(timesteps) + torch.mean(emb_vec, dim=2)
 
         return emb
+
+
+
 
 # # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 # class TokenEmbedding(nn.Module):
@@ -458,6 +463,43 @@ class EnvEnc_dtDec_Transformer_v1(nn.Module):
 
 
 
+class Transformer_causal_encoder(nn.Module):
+    def __init__(self, inp_dim, n_blocks, emb_dim, context_len, dropout, positional_encoding, n_heads, drop_p=0.1, ff_dim=None, device='cpu'):
+        super().__init__()
+        self.inp_dim = inp_dim
+        self.n_blocks = n_blocks
+        self.emb_dim = emb_dim
+        self.context_len = context_len
+        self.n_heads = n_heads
+        self.drob_p = drop_p
+        self.ff_dim = ff_dim if ff_dim is not None else context_len*4
+        # self.embed_timestep = nn.Embedding(context_len, emb_dim)
+        if positional_encoding == 'sin':
+            self.embed_timestep = PositionalEncoding(
+                emb_dim, dropout=dropout, maxlen=context_len)
+        elif positional_encoding == "simple":
+            self.embed_timestep = SimplePositionalEncoding(emb_dim, context_len)
+        self.embed_inp = nn.Linear(inp_dim, emb_dim)
+        self.enc_layer = torch.nn.TransformerEncoderLayer(d_model=emb_dim,
+                                                          nhead=n_heads,
+                                                          dim_feedforward=self.ff_dim,
+                                                          dropout=drop_p,
+                                                          activation='gelu',
+                                                          batch_first=True,
+                                                          )
+        self.model = torch.nn.TransformerEncoder(self.enc_layer, n_blocks)
+        self.predictor = nn.Linear(emb_dim, inp_dim)
+        self.causal_mask = generate_square_subsequent_mask(context_len, device)
+        
+    def forward(self, timesteps, src, padding_mask):
+        src_emb = self.embed_timestep(self.embed_inp(src), timesteps)
+        return self.predictor(self.model(src_emb, src_key_padding_mask=padding_mask, mask=self.causal_mask))
+
+
+
+
+
+
 
 
 class timm_ViT(nn.Module):
@@ -570,5 +612,6 @@ class fbMae_model(nn.Module):
 
         return outputs
     
+
 
 # END
