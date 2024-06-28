@@ -230,7 +230,8 @@ class ContGridWorld_v5_1(gym.Env):
         reset_state = np.array(reset_state, dtype=np.float32)
         if reset_state[0] == float('inf') and reset_state[1] == float('inf') and reset_state[2] == float('inf'):
             # idx = np.random.randint(0, len(self.start_pos))
-            x0, y0 = self.start_pos.copy()[0]
+            # x0, y0 = self.start_pos.copy()[0]
+            x0, y0 = self.start_pos.copy()
             reset_state = [0, x0, y0]
         self.state = np.array(reset_state, dtype=np.float32)
         self.done = False

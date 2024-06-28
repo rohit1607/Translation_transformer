@@ -364,6 +364,7 @@ class EnvEnc_dtDec_Transformer_v1(nn.Module):
                  dropout: float = 0.1,
                  batch_first = True,
                  positional_encoding: str = "simple",
+                 action_activation = 'sigmoid',
                  ):
         super(EnvEnc_dtDec_Transformer_v1, self).__init__()
 
@@ -374,6 +375,7 @@ class EnvEnc_dtDec_Transformer_v1(nn.Module):
         self.emb_size = emb_size
         self.max_tseps = max_tsteps
         self.max_dec_len = 3 * (max_tsteps) + 1
+        self.action_activation = action_activation
         self.transformer = Transformer(d_model=emb_size,
                                        nhead=nhead,
                                        num_encoder_layers=num_encoder_layers,
@@ -389,7 +391,12 @@ class EnvEnc_dtDec_Transformer_v1(nn.Module):
         
         # self.predict_rtg = torch.nn.Linear(emb_size, 1)
         # self.predict_state = torch.nn.Linear(emb_size, state_dim)
-        self.predict_action = nn.Sequential(nn.Linear(emb_size, action_dim), nn.Sigmoid())
+        if self.action_activation == 'sigmoid':
+            self.predict_action = nn.Sequential(nn.Linear(emb_size, action_dim), nn.Sigmoid())
+        elif self.action_activation == 'relu':
+            self.predict_action = nn.Sequential(nn.Linear(emb_size, action_dim), nn.ReLU())
+        else:
+            raise ValueError("No such action_activation type")
         
         # maxlen=max_tsteps+1 . +1 to remove out of index error
         if positional_encoding == 'sin':
@@ -427,6 +434,7 @@ class EnvEnc_dtDec_Transformer_v1(nn.Module):
         
         # outs = "R_ S0 A0 R0 S1 A1 R1 ...Sn m m m"
         action_preds = self.predict_action(outs[:,2::3])
+        action_preds = torch.clamp(action_preds, 0, 1)
         return action_preds
     
     def assemble_tgt_seq(self, tgt_states, tgt_actions, tgt_rtg, tgt_final_pos, timesteps):
@@ -439,7 +447,7 @@ class EnvEnc_dtDec_Transformer_v1(nn.Module):
         tgt_final_pos_emb = self.emb_sf(tgt_final_pos)
 
         # IMP: any change in indexing here should
-        # reflict in assemble_masks in src_utils
+        # reflect in assemble_masks in src_utils
         tgt_emb[:,0,:] = tgt_final_pos_emb[:]
         tgt_emb[:,1:1+3*T:3,:] = tgt_rtg_emb[:]
         tgt_emb[:,2:2+3*T:3,:] = tgt_states_emb[:]
@@ -613,5 +621,100 @@ class fbMae_model(nn.Module):
         return outputs
     
 
+
+
+
+
+
+
+def conv(n_in, n_out, **kwargs):
+    return nn.Conv2d(n_in, n_out, 3, padding=1, **kwargs)
+
+class Clamp(nn.Module):
+    def forward(self, x):
+        return torch.tanh(x / 3) * 3
+
+class Block(nn.Module):
+    def __init__(self, n_in, n_out):
+        super().__init__()
+        self.conv = nn.Sequential(conv(n_in, n_out), nn.ReLU(), conv(n_out, n_out), nn.ReLU(), conv(n_out, n_out))
+        self.skip = nn.Conv2d(n_in, n_out, 1, bias=False) if n_in != n_out else nn.Identity()
+        self.fuse = nn.ReLU()
+    def forward(self, x):
+        return self.fuse(self.conv(x) + self.skip(x))
+
+def Encoder():
+    return nn.Sequential(
+        conv(3, 64), Block(64, 64),
+        conv(64, 64, stride=2, bias=False), Block(64, 64), Block(64, 64), Block(64, 64),
+        conv(64, 64, stride=2, bias=False), Block(64, 64), Block(64, 64), Block(64, 64),
+        conv(64, 64, stride=2, bias=False), Block(64, 64), Block(64, 64), Block(64, 64),
+        conv(64, 4),
+    )
+
+def Decoder():
+    return nn.Sequential(
+        Clamp(), conv(4, 64), nn.ReLU(),
+        Block(64, 64), Block(64, 64), Block(64, 64), nn.Upsample(scale_factor=2), conv(64, 64, bias=False),
+        Block(64, 64), Block(64, 64), Block(64, 64), nn.Upsample(scale_factor=2), conv(64, 64, bias=False),
+        Block(64, 64), Block(64, 64), Block(64, 64), nn.Upsample(scale_factor=2), conv(64, 64, bias=False),
+        Block(64, 64), conv(64, 3),
+    )
+
+class TAESD(nn.Module):
+    latent_magnitude = 3
+    latent_shift = 0.5
+
+    def __init__(self, encoder_path="/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tiny_ae_logs/taesd_encoder.pth", decoder_path="/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tiny_ae_logs/taesd_decoder.pth"):
+        """Initialize pretrained TAESD on the given device from the given checkpoints."""
+        super().__init__()
+        self.encoder = Encoder()
+        self.decoder = Decoder()
+        if encoder_path is not None:
+            self.encoder.load_state_dict(torch.load(encoder_path, map_location="cuda"))
+        if decoder_path is not None:
+            self.decoder.load_state_dict(torch.load(decoder_path, map_location="cuda"))
+        self.dev = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+        self.max_v = 5.
+        self.min_v = -5.
+        self.min_sd = -10
+        self.max_sd = 100
+
+    def scale_input(self,x):
+        x[:, :2] = (x[:, :2] - self.min_v) / (self.max_v - self.min_v)  
+        # x[:, 2] =   (x[:, 2] - self.min_sd) /(self.max_sd - self.min_sd)
+        return x
+    
+    def unscale_output(self,x):
+        x[:, :2] = x[:, :2]*(self.max_v - self.min_v)  + self.min_v
+        # x[:, 2] =  x[:, 2]*(self.max_sd - self.min_sd)  + self.min_sd
+        return x
+    
+    @staticmethod
+    def scale_latents(x):
+        """raw latents -> [0, 1]"""
+        return x.div(2 * TAESD.latent_magnitude).add(TAESD.latent_shift).clamp(0, 1)
+
+    @staticmethod
+    def unscale_latents(x):
+        """[0, 1] -> raw latents"""
+        return x.sub(TAESD.latent_shift).mul(2 * TAESD.latent_magnitude)
+
+    def forward(self, x):
+        # image_raw = TF.to_tensor(x).unsqueeze(0).to(self.dev) #torch.Size([1, 256, 3, 512, 512])
+        # image_raw = torch.tensor(x, requires_grad=True).to(self.dev)
+        # x = x.squeeze(dim=0)
+        image_raw = self.scale_input(x.to(self.dev))
+        image_enc = self.encoder(image_raw).to(self.dev)
+        # image_dec = self.decoder(image_enc).clamp(0, 1)
+        # image_dec = self.unscale_output(self.decoder(image_enc))
+        image_dec = self.decoder(image_enc)
+        return image_dec
+    
+    def return_only_enc(self, x):
+        image_raw = self.scale_input(x.to(self.dev))
+        image_enc = self.encoder(image_raw)
+        return image_enc
+    
 
 # END

@@ -1,0 +1,117 @@
+# Gym Env
+env_name: "gym_examples/contGrid-v5_2"
+# state_dim: 3
+use_txyuv_as_states: False # False
+action_dim: 1
+action_range: [0, 6.28318]
+F: 0.115
+vel_field: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_25305"
+del_t: 1. 
+scale_velocity: True
+vmax_by_F: 1.174
+space_scale: 1
+target_radius: 2
+rtg_scale: 100
+add_transition_noise_during_inf: False
+noise_var: [0.1,0]
+
+# Paths
+# log_dir: "log"
+log_dir: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/log'
+dataset_name: "Perlin"
+# dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_5_100_327_withr/gathered_5_100_327_withr.pkl"
+# params2_name: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_5_100_327_withr/params.yml"
+# dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_paths/gathered_2_440_withr/gathered_2_440_withr.pkl"
+# dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_paths/gathered_4_9225_withr_nm20/gathered_4_9225_withr_nm20.pkl"
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_paths/gathered_6_9225_withr_nm20_new/gathered_6_9225_withr_nm20_new.pkl'
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_paths/gathered_6_9225_withr_nm40_new/gathered_6_9225_withr_nm40_new.pkl'
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_paths/gathered_7_100_withr_nm40_new/gathered_7_100_withr_nm40_new.pkl'
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_paths/gathered_8_10_withr_nm40_new/gathered_8_10_withr_nm40_new.pkl'
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_paths/gathered_10_25_withr_nm40_new/gathered_10_25_withr_nm40_new.pkl'
+dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_paths/gathered_11_25_withr_nm40_new_txyuv/gathered_11_25_withr_nm40_new_txyuv.pkl'
+params2_name: None
+
+# mae_model_name: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/mae_logs/GPT_MAE/Sept23_100envs_cosw_randomr_hs_168E/Bestuned_fbMae_Model_5000D_168E.pt"
+# mae_model_name: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/mae_logs/GPT_MAE/Sept23_100envs_cosw_randomr_hs_1000E/Bestuned_fbMae_Model_5000D_1000E.pt"
+# env_decoder_name: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_DG3_model_11-09-09-19.pt/best_vloss.pt"
+# tae_model_arch: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tiny_ae_logs/Nov23_100envs_clr_randomr/finetuned_tinyautoenc_500D_100E/arch.pt"
+# tae_state_dict: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tiny_ae_logs/Nov23_100envs_clr_randomr/finetuned_tinyautoenc_500D_100E/best_vloss.pt"
+
+# Note: Ensure contextl len of the env_predictor is the same as pptt
+env_predictor_name: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_Perlin_model_03-19-13-56.pt"
+
+
+# Dataset
+random_split: True
+split_tr_tst_val: [0.1, 0.1, 0.1] #[0.7, 0.1, 0.2]
+split_ran_seed: 40
+num_workers: 4
+
+# Training
+device: 'cuda'
+batch_size: 8
+loss_type: 'mae_over_angle'  # 'cross_entropy' or 'mean_norm_of_vec_diff' or "mse_over_angle" or "cosine_similarity" or "cos_diff" or "mae_over_angle"
+optimizer_name: 'AdamW'
+num_epochs: 10000
+lr: 0.00005 #0.0002 #0.001  0.0001
+final_lr: 0.000003 #0.00001 0.000005
+wt_decay: 0 #0.0001
+dropout_p: 0 #0.1
+break_training: 20
+grad_clip: 10
+# matmul_precision: 'high'      # 'high' or 'medium'
+use_fabric: False
+# add_target_loss: False
+# warmup_steps: 10000
+src_LN_in_dataloader: True
+
+
+
+use_scheduler: True
+stepLR_stepsize: 1
+
+# Architecture
+pos_encoding_type: 'simple' # simple or sin
+num_encoder_layers: 8 #3
+num_decoder_layers: 8 #3
+context_len: 63
+embed_dim: 96 #48
+n_heads: 8 #12
+action_activation: 'sigmoid' # 'sigmoid', 'relu'
+
+# Save and Evaluate
+eval_inerval: 200
+chkpt_interval: 25
+chkpt_list: []
+translate_earlybreaks: [20, 20, 20] #tr, test, val
+
+desired_rtg: 60  # TODO: can we do something smarter with the reward sequence?
+cheat_RTG: True
+dont_use_rtg_in_input_seq: True
+
+# Vizualization
+viz_input: False
+sim_tgt_actions: False # works only if viz_input is True
+viz_break_at: 100
+plot_grads_k_freq_ep_intvl: [1,5] #None or [1,2], every kth minibatch in eth epoch 
+
+
+
+# preprocessor: 'ViT_scratch'
+# vit_scratch config
+# hidden_size_vit: 128 = emb_dim
+# num_hidden_layers_vit: 2
+# num_attention_heads_vit: 4
+# intermediate_size_vit: 256
+# image_size_vit: 224
+# patch_size_vit: 16
+# num_channels_vit: 2
+# hidden_dropout_prob_vit: 0.0
+# attention_probs_dropout_prob_vit: 0.0
+# 4 4 32
+
+
+# num_eval_ep: 200
+# a_tl: 1000
+# req_context_len: 36
+# 

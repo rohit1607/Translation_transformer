@@ -7,14 +7,15 @@ import torchvision.transforms.functional as TF
 from torch.nn import functional as F
 import numpy as np
 import random
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.pyplot as plt
-from src.mae_all_data_load import plot_vel_field, GiveMe_loaders, load_vel, VelocityDataset
+from src.mae_all_data_load import get_path_names, scale_velocity, load_vel_DG3, load_vel_perlin, VelocityDataset, plot_vel_field, GiveMe_loaders
 from src.get_data_names import get_names
 from src.Class_optimsAndScheds import Optims_Scheds
 from src.utils import make_dir, checkpoint_model, plot_grad_flow
 # from src.src_utils import checkpoint_model
 from cfg.config_tae import config as sr_config
-from cfg.config_tae import hpt_config
+# from cfg.config_tae import hpt_config
 import wandb
 from datetime import datetime
 import argparse
@@ -70,10 +71,10 @@ class TAESD(nn.Module):
         if decoder_path is not None:
             self.decoder.load_state_dict(torch.load(decoder_path, map_location="cuda"))
         self.dev = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-        self.max_v = 5.
-        self.min_v = -5.
-        self.min_sd = -10
-        self.max_sd = 100
+        self.max_v = 3.
+        self.min_v = -3.
+        self.min_sd = 0
+        self.max_sd = 10
 
     def scale_input(self,x):
         x[:, :2] = (x[:, :2] - self.min_v) / (self.max_v - self.min_v)  
@@ -98,9 +99,9 @@ class TAESD(nn.Module):
     def forward(self, x):
         # image_raw = TF.to_tensor(x).unsqueeze(0).to(self.dev) #torch.Size([1, 256, 3, 512, 512])
         # image_raw = torch.tensor(x, requires_grad=True).to(self.dev)
-        x = x.squeeze(dim=0)
+        # x = x.squeeze(dim=0)
         image_raw = self.scale_input(x.to(self.dev))
-        image_enc = self.encoder(image_raw).to(self.dev)
+        image_enc = self.encoder(image_raw.to(dtype=torch.float32)).to(self.dev)
         # image_dec = self.decoder(image_enc).clamp(0, 1)
         # image_dec = self.unscale_output(self.decoder(image_enc))
         image_dec = self.decoder(image_enc)
@@ -108,7 +109,7 @@ class TAESD(nn.Module):
     
     def return_only_enc(self, x):
         image_raw = self.scale_input(x.to(self.dev))
-        image_enc = self.encoder(image_raw)
+        image_enc = self.encoder((image_raw).to(torch.float32))
         return image_enc
     
 
@@ -236,23 +237,57 @@ def train_reconstruction_plot(dataset, tae, i, sth=0, fname="tae_validation_(", 
     taesd = TAESD()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     image = dataset.__getitem__(sth)
+    taesd.to(device)
     
-    tae.eval()
+    taesd.eval()
     with torch.no_grad():
-        output_image = taesd.unscale_output(tae(image.unsqueeze(0).to(device)))
-        
+        output_image = taesd.unscale_output(taesd(image.unsqueeze(0).to(device)))
+     
+    image = image.cpu().numpy()    
+    output_image = output_image.cpu().numpy()
     # Save at every 5th epoch
     plt.clf()
     tname = fname+str(i)+")dataset_("+str(sth)+")sample"
 
     if ep==st_eps:
-        plot_vel_field(dataset.__getitem__(sth)[0], dataset.__getitem__(sth)[1], dataset.__getitem__(sth)[2], flow_name=tname, path=path)
-        wandb.log({"TRAIN_original_velocity_field_("+str(i)+")dataset": wandb.Image(path+"/"+tname+".png")})
-        
-    # TF.to_pil_image(output_image[0]).save(path+tname+".png")
-    plot_vel_field(output_image[0][0].cpu(), output_image[0][1].cpu(), output_image[0][2].cpu(), flow_name=tname, path=path)
-    wandb.log({"TRAIN_reconstructed_velocity_field_("+str(i)+")dataset": wandb.Image(path+"/"+tname+".png")})
-    
+        plt.clf()
+        fig, axs = plt.subplots(1, 3, figsize=(15,5), gridspec_kw={'width_ratios': [1, 1, 1]})
+        # vmin = min(np.min(output_image[0][0].cpu().numpy()), np.min(image[0].cpu().numpy()))
+        # vmax = max(np.max(output_image[0][0].cpu().numpy()), np.max(image[0].cpu().numpy()))
+        vmag_image = (image[0]**2 + image[1]**2)**0.5
+        vmag_outputimage = (output_image[0][0]**2 + output_image[0][1]**2)**0.5
+        vmin = min(np.min(vmag_outputimage), np.min(vmag_image))
+        vmax = max(np.max(vmag_outputimage), np.max(vmag_image))        
+        # plot_vel_field(dataset.__getitem__(sth)[0], dataset.__getitem__(sth)[1], dataset.__getitem__(sth)[2], flow_name=tname, path=path)
+        ax = axs[0]
+        original_im = plot_vel_field(ax, vmin, vmax, image[0], image[1], image[2], title_name=f"Original")
+        divider = make_axes_locatable(ax)
+        cax_vel = divider.append_axes("right", size="5%", pad=0.1)
+        cax_vel.axis('off')
+        # wandb.log({"TRAIN_original_velocity_field_("+str(i)+")dataset": wandb.Image(path+"/"+tname+".png")}) #flow_name=tname, path=path,
+        ax = axs[1]
+        # TF.to_pil_image(output_image[0]).save(path+tname+".png")
+        # plot_vel_field(output_image[0][0].cpu(), output_image[0][1].cpu(), output_image[0][2].cpu(), flow_name=tname, path=path)
+        reconstructed_im = plot_vel_field(ax, vmin, vmax, output_image[0][0], output_image[0][1], output_image[0][2], title_name=f"Reconstructed")
+        divider = make_axes_locatable(ax)
+        cax_vel = divider.append_axes("right", size="5%", pad=0.1)
+        cbar = fig.colorbar(reconstructed_im, cax=cax_vel) #, ticks=np.linspace(vmin, vmax, 8)
+        cbar.set_label('Velocity')
+        # wandb.log({"TRAIN_reconstructed_velocity_field_("+str(i)+")dataset": wandb.Image(path+"/"+tname+".png")})
+        ax = axs[2]
+        abs_difference = np.abs(image - output_image[0])
+        vmag_difference = (abs_difference[0]**2 + abs_difference[1]**2)**0.5
+        vmin = np.min(vmag_difference)
+        vmax = np.max(vmag_difference)
+        mean_error = np.mean(vmag_difference)
+        difference_image = plot_vel_field(ax, vmin, vmax, np.abs(image[0] - output_image[0][0]), np.abs(image[1] - output_image[0][1]), np.abs(image[2] - output_image[0][2]), title_name=f"Difference; {mean_error=}")
+        divider = make_axes_locatable(ax)
+        cax_dif = divider.append_axes("right", size="5%", pad=0.1)
+        cbar = fig.colorbar(difference_image, cax=cax_dif) #, ticks=np.linspace(vmin, vmax, 8)
+        cbar.set_label('Difference')
+        # fig.tight_layout()
+        plt.savefig(path+"/"+tname+".png")
+        wandb.log({"TRAIN_("+str(i)+")dataset": wandb.Image(path+"/"+tname+".png")})
     
     # im = TF.to_tensor(Image.open(im_path).convert("RGB")).unsqueeze(0).to(dev)
 
@@ -311,8 +346,12 @@ def main():
     
     datapaths = get_names(data_path = cfg.Train_data_path)
     train_dataloader, val_dataloader, data_sets, test_dat = GiveMe_loaders(*datapaths, 
-                                       batch_size=cfg.batch_size, path=cfg.tae_path, plot_dat=cfg.plot_dat, cfg=cfg)    
-    model = TAESD().to(device)
+                                       batch_size=cfg.batch_size, path=cfg.tae_path, plot_dat=cfg.plot_dat, cfg=cfg, 
+                                       obstacle_mask='data',
+                                       dataset='DG3_multi_obs'
+                                        #  multi_obs=True
+                                         )    
+    model = TAESD(encoder_path=None, decoder_path=None).to(device)
 
     pytorch_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     pytorch_total_params = sum(p.numel() for p in model.parameters())
@@ -338,17 +377,17 @@ def main():
     bestModel.eval()
     
     with torch.no_grad():
-        vel_field_data = load_vel(cfg.aftrain_testDatpath, cfg)
-        dataset = VelocityDataset(vel_field_data)
+        vel_field_data = load_vel_DG3(cfg.aftrain_testDatpath, cfg, obstacle_mask='data')
+        dataset = VelocityDataset(vel_field_data, config=cfg , obstacle_mask='data', dataset='DG3_multi_obs')
         plt.clf()
         plot_vel_field(dataset.__getitem__(0)[0], dataset.__getitem__(0)[1], dataset.__getitem__(0)[2], flow_name="aftrain_original", path=model_save_dir)
         wandb.log({"aftrain_original_sample": wandb.Image(model_save_dir+"/aftrain_original.png")})
-        test_reconstruction_plot(dataset, bestModel, n_samples=cfg.n_samples, fname="fbMae_aftrain_test_sample", path=model_save_dir)
+        test_reconstruction_plot(dataset, bestModel, n_samples=cfg.n_samples, fname="tae_aftrain_test_sample", path=model_save_dir)
 
         plt.clf()
         plot_vel_field(test_dat.__getitem__(0)[0], test_dat.__getitem__(0)[1],test_dat.__getitem__(0)[2], flow_name="test_original", path=model_save_dir)
         wandb.log({"test_original_sample": wandb.Image(model_save_dir+"/test_original.png")})
-        test_reconstruction_plot(test_dat, bestModel, n_samples=cfg.n_samples, fname="fbMae_test_sample", path=model_save_dir)
+        test_reconstruction_plot(test_dat, bestModel, n_samples=cfg.n_samples, fname="tae_test_sample", path=model_save_dir)
     
     
 
@@ -364,5 +403,5 @@ if __name__ == "__main__":
     if ARGS_MODE=='single_run':
         main()
     else:
-        sweep_id = wandb.sweep(sweep=hpt_config, project="tae_November2023")
+        sweep_id = wandb.sweep(sweep=hpt_config, project="finetune_tae")
         wandb.agent(sweep_id, function=main, count=2)

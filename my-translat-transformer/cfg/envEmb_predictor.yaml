@@ -5,29 +5,39 @@
 # dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_5_100_327_withr/gathered_rep_5_100_327_withr_Bestuned_fbMae_Model_5000D_1000E.pkl"
 # dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_1_100_2L_withr/gathered_rep_1_100_2L_withr_Bestuned_fbMae_Model_5000D_1000E_n2500.pkl'
 # dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_1_100_2L_withr/gathered_rep_1_100_2L_withr_Bestuned_fbMae_Model_5000D_1000E_n115000.pkl'
-dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_1_100_2L_withr/gathered_rep_1_100_2L_withr_tiny_autoencoder_n62500.pkl'
-dataset_name: "DG3"
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/Gathered_datasets/gathered_1_100_2L_withr/gathered_rep_1_100_2L_withr_tiny_autoencoder_n62500.pkl'
+# dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets/gathered_2_500/gathered_rep_2_500_tiny_autoencoder.pkl"
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets/gathered_3_4000/gathered_rep_3_4000_tiny_autoencoder.pkl'
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets/gathered_4_10k/gathered_rep_4_10k_tiny_autoencoder.pkl'
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets/gathered_5_30/gathered_rep_5_30_tiny_autoencoder.pkl'
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_only_yi/gathered_6_5k/gathered_6_5k.pkl'
+# dataset_path: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_only_yi/gathered_8_10k_nm40/gathered_8_10k_nm40.pkl"
+# dataset_path: '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_only_yi/gathered_9_10k/gathered_9_10k.pkl'
+dataset_path : '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_only_yi/gathered_10_10k_nm20/gathered_10_10k.pkl'
+# dataset_path : '/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_only_yi/gathered_11_5k/gathered_11_5k.pkl'
+dataset_name: "Perlin"
 log_dir: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log"
 
 # Dataset
 random_split: True
-split_tr_tst_val: [0.2, 0.65, 0.15]
-# split_tr_tst_val: [0.01, 0.98, 0.01]
+# split_tr_tst_val: [0.2, 0.65, 0.15]
+split_tr_tst_val: [0.01, 0.89, 0.1]
+# split_tr_tst_val: [0.5, 0.4, 0.1]
 translate_earlybreaks: [50, 50, 50]
 split_ran_seed: 42
 
 # Training
 device: 'cuda'
-bs: 8
+bs: 48
 optimizer: 'adamw'
 scheduler: 'seqlr_w'
 use_scheduler: True
 lr: 0.001
 momentum: 0.9
 final_lr: 0.000001
-wd: 0.001 #weight_decay
-num_epochs: 200
-break_training: 200
+wd: 0.01 #weight_decay
+num_epochs: 1000
+break_training: 1000
 
 # [LIN --sched]
 opt_factor: 0.99 
@@ -49,16 +59,16 @@ gamma: 1.0
 
 # Architecture
 pos_encoding_type: 'sin' # simple or sin
-drop_p: 0.1
-n_heads: 2
-context_len: 123
-h_dim: 32
-n_blocks: 2
-B: 10
+drop_p: 0.2
+n_heads: 4 #4 #2
+context_len: 63
+h_dim: 8 #64 #32
+n_blocks: 1 #2
+# B: 10
 T: 120
 
 # Save and Evaluate
 eval_inerval: 2
 chkpt_interval: 5
 chkpt_list: []
-translate_earlybreaks: [2, 2, 2] #tr, test, val
+translate_earlybreaks: [4, 4, 4] #tr, test, val

@@ -102,13 +102,16 @@ class Block(nn.Module):
 
 class DecisionTransformer(nn.Module):
     def __init__(self, state_dim, act_dim, n_blocks, h_dim, context_len,
-                 n_heads, drop_p, max_timestep=4096, target_token=False):
+                 n_heads, drop_p, max_timestep=120, target_token=False, 
+                 sigmoid_activation_in_action=None,
+                 dont_use_rtg=False):
         super().__init__()
 
         self.state_dim = state_dim
         self.act_dim = act_dim
         self.h_dim = h_dim
         self.n_heads = n_heads
+        self.dont_use_rtg = dont_use_rtg
         ### transformer blocks
         if target_token:
             input_seq_len = (3 * context_len) +1 
@@ -131,17 +134,19 @@ class DecisionTransformer(nn.Module):
 
         # continuous actions
         self.embed_action = torch.nn.Linear(act_dim, h_dim)
-        use_action_tanh = False # True for continuous actions
+        # use_action_tanh = False # True for continuous actions
 
         ### prediction heads
         self.predict_rtg = torch.nn.Linear(h_dim, 1)
         self.predict_state = torch.nn.Linear(h_dim, state_dim)
         self.predict_action = nn.Sequential(
-            *([nn.Linear(h_dim, act_dim)] + ([nn.Tanh()] if use_action_tanh else []))
+            *([nn.Linear(h_dim, act_dim)] + ([nn.Sigmoid()] if sigmoid_activation_in_action else []))
         )
 
 
-    def forward(self, timesteps, states, actions, returns_to_go, target_token=None):
+    def forward(self, timesteps, states, actions, returns_to_go, target_token=None,):
+        
+        dont_use_rtg = self.dont_use_rtg
         # TODO: shubham: add env_seq at embedding
         B, T, _ = states.shape
 
@@ -162,9 +167,14 @@ class DecisionTransformer(nn.Module):
         # TODO: Shubham 
         # make changes to incorporate env sequences
         # (r_0, s_0, e0, a_0, r_1, e1, s_1, a_1, r_2, s_2, a_2 ...)
-        h = torch.stack(
-            (returns_embeddings, state_embeddings, action_embeddings), dim=1
-        ).permute(0, 2, 1, 3).reshape(B, 3 * T, self.h_dim)
+        if dont_use_rtg:
+            h = torch.stack(
+                (state_embeddings, action_embeddings), dim=1
+            ).permute(0, 2, 1, 3).reshape(B, 2 * T, self.h_dim)    
+        else:
+            h = torch.stack(
+                (returns_embeddings, state_embeddings, action_embeddings), dim=1
+            ).permute(0, 2, 1, 3).reshape(B, 3 * T, self.h_dim)
 
 
         # print(f"h.shape = {h.shape} \n states.shape = {states.shape}")
@@ -207,13 +217,20 @@ class DecisionTransformer(nn.Module):
         # that is, for each timestep (t) we have 3 output embeddings from the transformer,
         # each conditioned on all previous timesteps plus 
         # the 3 input variables at that timestep (r_t, s_t, a_t) in sequence.
-        h = h.reshape(B, T, 3, self.h_dim).permute(0, 2, 1, 3)
+        if dont_use_rtg:
+            h = h.reshape(B, T, 2, self.h_dim).permute(0, 2, 1, 3)
+        else:
+            h = h.reshape(B, T, 3, self.h_dim).permute(0, 2, 1, 3)
         # print(f"post reshape h.shape = {h.shape} ")
 
         # get predictions
-        return_preds = self.predict_rtg(h[:,2])     # predict next rtg given r, s, a
-        state_preds = self.predict_state(h[:,2])    # predict next state given r, s, a
-        action_preds = self.predict_action(h[:,1])  # predict action given r, s
+        return_preds = None   # predict next rtg given r, s, a
+        if dont_use_rtg:
+            state_preds = self.predict_state(h[:,1])    # predict next state given r, s, a
+            action_preds = self.predict_action(h[:,0])  # predict action given r, s            
+        else:
+            state_preds = self.predict_state(h[:,2])    # predict next state given r, s, a
+            action_preds = self.predict_action(h[:,1])  # predict action given r, s
         # print(f"h[:,2].shape =  {h[:,2].shape}")
         # print(f"state_preds in model =  {state_preds.shape}")
 

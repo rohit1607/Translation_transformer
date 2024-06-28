@@ -6,6 +6,7 @@ from gym_examples.envs.cont_gridworld_v6 import ContGridWorld_v6
 
 # v5_1 and v6_1 can additionally accommodate multiple targets
 from gym_examples.envs.cont_gridworld_v5_1 import ContGridWorld_v5_1
+from gym_examples.envs.cont_gridworld_v5_2 import ContGridWorld_v5_2
 from gym_examples.envs.cont_gridworld_v6_1 import ContGridWorld_v6_1
 
 from gym_examples.envs.cont_gridworld_v7_1 import ContGridWorld_v7_1

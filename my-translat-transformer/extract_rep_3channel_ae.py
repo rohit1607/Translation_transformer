@@ -11,7 +11,6 @@ import sys
 from finetune_tinyautoencoder import TAESD, Clamp, Block, conv, Encoder, Decoder
 from src.utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object
 from scipy.ndimage import distance_transform_edt
-from src.mae_all_data_load import plot_vel_field, GiveMe_loaders, load_vel, VelocityDataset
 import gc
 
 class ExtractRep:
@@ -19,7 +18,7 @@ class ExtractRep:
         self.traj_dataset = traj_datset
         # self.tae = tae
 
-    def load_velocity(self, flow_dir):
+    def load_velocity(self, flow_dir, obs_mask=True):
         scl = 1
         # flow_dir = Path(flow_dir)
         # flow_dir = flow_dir.parent
@@ -30,8 +29,11 @@ class ExtractRep:
         all_v_mat = (np.load(flow_dir +'/all_v_mat.npy' )*scl)
         all_vi_mat = (np.load(flow_dir +'/all_vi_mat.npy')*scl)
         all_Yi = (np.load(flow_dir +'/all_Yi.npy' )*scl)
-        obstacle_mask = (np.load(flow_dir + '/obstacle_mask.npy')*scl)
-        obstacle_mask = distance_transform_edt(1-obstacle_mask) # Not sure
+        if obs_mask:
+            obstacle_mask = (np.load(flow_dir + '/obstacle_mask.npy')*scl)
+            obstacle_mask = distance_transform_edt(1-obstacle_mask) # Not sure
+        else:
+            obstacle_mask = np.zeros_like(all_u_mat)
         vel_field_data = [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi, obstacle_mask]
         return vel_field_data
 
@@ -58,7 +60,7 @@ class ExtractRep:
         # device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
         # self.tae.to(device)
         vx_vy_list = []
-        vel_data = self.load_velocity(flow_dir) # Shape (list) : [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
+        vel_data = self.load_velocity(flow_dir, obs_mask=False) # Shape (list) : [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
         for t in range(vel_data[2].shape[0]): # Extract velocity over all timesteps
             temp = self.extract_velocity(vel_data, t, rzn)
             vx_vy_list.append(temp)
@@ -82,26 +84,30 @@ class ExtractRep:
 if __name__ == "__main__":
     # ROOT = "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GenHW_all/"
     # ROOT = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/"
-    ROOT = "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/"
-    gather_dir_name = "1_100_2L_withr"
-    gather_name = "1_100_2L_withr"
-    gather_dir = os.path.join(ROOT, f"Gathered_datasets/gathered_{gather_dir_name}")
-    traj_dataset = load_pkl(os.path.join(gather_dir, f"gathered_{gather_name}.pkl"))
+    # ROOT = "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/GPT_dset_DG3/static_obs/GPTdset_DG3_g100x100x120_r5k_Obsv1_scaled_0.7_multi_ran_stat_new/"
+    ROOT = '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/DG3'
+    # gather_dir_name = "1_100_2L_withr"
+    # gather_name = "1_100_2L_withr"
+    # gather_dir = os.path.join(ROOT, f"Gathered_datasets/gathered_{gather_dir_name}")
+    # traj_dataset = load_pkl(os.path.join(gather_dir, f"gathered_{gather_name}.pkl"))
+    traj_dataset = load_pkl('/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/DG3/traj_data_for_model_5_trad2.pkl')
     
     device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
-    # tae = TAESD()
+    tae = TAESD()
     model_name = 'tiny_autoencoder'
     tae_model_name = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tiny_ae_logs/Nov23_100envs_clr_randomr/finetuned_tinyautoenc_500D_100E/arch.pt"
-    tae = torch.load(tae_model_name).to(device)
-    model_state_dict_path = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tiny_ae_logs/Nov23_100envs_clr_randomr/finetuned_tinyautoenc_500D_100E/best_vloss.pt"
-    tae.load_state_dict(torch.load(model_state_dict_path)['model_state_dict'])
+    # Commented by Shubham 4.01.24
+    # tae = torch.load(tae_model_name).to(device)
+    # model_state_dict_path = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tiny_ae_logs/Nov23_100envs_clr_randomr/finetuned_tinyautoenc_500D_100E/best_vloss.pt"
+    # tae.load_state_dict(torch.load(model_state_dict_path)['model_state_dict'])
     
     # tae.to(device)
     
     extract_rep = ExtractRep(traj_dataset, tae)
-    save_dir = os.path.join(ROOT, f"Gathered_datasets/gathered_{gather_dir_name}")
-    save_name = os.path.join(save_dir, f"gathered_rep_{gather_name}_{model_name}.pkl")   
-    # save_interval = len(traj_dataset)/10
+    # save_dir = os.path.join(ROOT, f"Gathered_datasets/gathered_{gather_dir_name}")
+    # save_name = os.path.join(save_dir, f"gathered_rep_{gather_name}_{model_name}.pkl")   
+    save_dir ='/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/DG3'
+    save_name = os.path.join(save_dir,'rep_traj_data_for_model_5_trad2.pkl')
     save_interval = 2500
 
     print(len(traj_dataset))
@@ -117,7 +123,8 @@ if __name__ == "__main__":
         if idx % save_interval ==0:
             try:
                 print(f" saving data at {idx=}")
-                save_object(traj_dataset, os.path.join(save_dir, f"gathered_rep_{gather_name}_{model_name}_n{idx}.pkl")  )
+                # save_object(traj_dataset, os.path.join(save_dir, f"gathered_rep_{gather_name}_{model_name}_n{idx}.pkl")  )
+                save_object(traj_dataset, os.path.join(save_dir, f"rep_traj_data_for_model_5_trad2_n{idx}.pkl")  )
             except:
                 print(f"save didnt work at {idx=}")
 

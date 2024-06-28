@@ -1,0 +1,21 @@
+Make each line a string
+
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_4206",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_2607",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_8042",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_3571",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_5641",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_8616",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_3447",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_7971",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_7395",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_7764",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_550",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_8903",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_818",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_5437",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_1768",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_2108",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_7516",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_6938",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_2666"

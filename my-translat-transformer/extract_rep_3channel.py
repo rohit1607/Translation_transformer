@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 from src.utils import read_cfg_file, save_yaml, load_pkl, print_dict, save_object
 from scipy.ndimage import distance_transform_edt
-from src.mae_all_data_load import plot_vel_field, GiveMe_loaders, load_vel, VelocityDataset
+from src.mae_all_data_load import plot_vel_field, GiveMe_loaders, load_vel_perlin, VelocityDataset
 from src.Class_fbMae_preTrained import fbMae_model
 from src.Class_optimsAndScheds import Optims_Scheds
 from cfg.config_fbMae import hpt_config

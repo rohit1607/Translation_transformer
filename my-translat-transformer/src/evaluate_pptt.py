@@ -23,7 +23,7 @@ import numpy as np
 from root_path import ROOT
 from PIL import ImageFile
 sys.path.append("/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer")
-from extract_rep_3channel import ExtractRep
+# from extract_rep_3channel import ExtractRep
 import tqdm
 import matplotlib.pyplot as plt
 tmp_path='/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tmp'
@@ -76,9 +76,11 @@ def closed_loop_tranlsate(model: torch.nn.Module, test_idx, test_dataloader, tr_
 
             # set up environment
             flow_dir = flow_dir[0]
-            env = setup_env(flow_dir)
+            env = setup_env(flow_dir, target_id=-1)
             env.reset()
-            env.set_rzn(rzn)
+            # cont_gridworld_v5_2 does not have set_rzn method due to perlin
+            if hasattr(env, "set_rzn"):
+                env.set_rzn(rzn)
 
             count += 1
             if count == earlybreak:
@@ -176,11 +178,14 @@ def closed_loop_tranlsate(model: torch.nn.Module, test_idx, test_dataloader, tr_
                 # end_fp = time.time()
                 # print(f"rebuttal: forward pass time: {end_fp - start_fp}")
 
-            op_traj_dict['states'] = states.cpu() # normalized
-            op_traj_dict['actions'] = actions.cpu()*2*np.pi
+            op_traj_dict['states'] = pred_states.cpu() # normalized
+            op_traj_dict['actions'] = pred_actions.cpu()*2*np.pi
             op_traj_dict['t_done'] = t_done
             op_traj_dict['n_tsteps'] = t+2
             op_traj_dict['success'] = reached_target
+            op_traj_dict['denorm_final_pos'] = denorm_final_pos
+            op_traj_dict['target_id'] = env.target_id # for redundancy
+            # op_traj_dict['mse'] = mse
             # op_traj_dict['mse'] = mse
             # op_traj_dict['all_att_mat'] = extract_attention_scores(model)
             # op_traj_dict['states_for_action_labels'] = None
@@ -201,7 +206,46 @@ def closed_loop_tranlsate(model: torch.nn.Module, test_idx, test_dataloader, tr_
     results['runs_from_set(count)'] = count
     return op_traj_dict_list, results
     
+def denormalize_pos(pos, mean, std):
+    return (pos * std) + mean
 
+def fail_list():
+    fail_list = [
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_7547",
+"/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_212",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_746",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_5836",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_9056",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_4255",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_4256",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_1918",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_2703",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_4987",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_2773",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_3688",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_2097",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_9264",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_1760",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_3790",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_8117",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_3483",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_4392",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_8065",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_2116",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_2520",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_3217",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_8812",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_4654",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_260",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_5783",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_6376",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_8969",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_8462",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_5528",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_6724",
+# "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_6493",
+     ]
+    return fail_list
 
 def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, cfg, earlybreak=10**8):
     model.eval()
@@ -213,15 +257,18 @@ def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, c
     states_mean, states_std = tr_set_stats
     states_mean = torch.from_numpy(states_mean).to(cfg.device)
     states_std = torch.from_numpy(states_std).to(cfg.device)
+    states_mean_cpu = states_mean.cpu().numpy()
+    states_std_cpu = states_std.cpu().numpy()
     eps = 1e-6
     cl = cfg.context_len
     device = cfg.device
     
     with torch.no_grad():
         # TODO: make closed loop inference
-        for timesteps, actions, states, rtg, action_mask, final_pos, encoder_input, tgt_padding_mask, n, idx, flow_dir, rzn in test_dataloader:
+        for _, (timesteps, actions, states, rtg, action_mask, final_pos, encoder_input, tgt_padding_mask, n, idx, flow_dir, rzn) in enumerate(tqdm.tqdm(test_dataloader)):
             # if idx%100==0:
             #     print(idx)
+            denorm_final_pos = denormalize_pos(final_pos, states_mean_cpu[1:], states_std_cpu[1:])
             states = states.to(device)
             # TODO: will have to use dynamically updated encoder_input instead
             encoder_input = encoder_input.to(device)
@@ -232,10 +279,10 @@ def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, c
 
             # set up environment
             flow_dir = flow_dir[0]
-            env = setup_env(flow_dir)
+            env = setup_env(flow_dir, target_id=-1, denorm_final_pos=denorm_final_pos)
             env.reset()
-            env.set_rzn(rzn)
-
+            if hasattr(env, "set_rzn"):
+                env.set_rzn(rzn)
             count += 1
             if count == earlybreak:
                 break
@@ -252,7 +299,14 @@ def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, c
             # states is arleady normalized in the dataloader
             pred_states[0,0,:] = states[0,0,:]
             # TODO: might have to not condition on desired rtg if doesnt work well
-            running_rtg = cfg.desired_rtg  / cfg.rtg_scale 
+            # TODO: HARDCODE. REMOVE. Only for testing rtg hypothesis
+            if not hasattr(cfg, 'cheat_RTG'):
+                cheat_flag = True
+            if cfg.cheat_RTG: #or cheat_flag: 
+                running_rtg = rtg[0,0,0]
+            else:
+                running_rtg = cfg.desired_rtg  / cfg.rtg_scale 
+
             pred_rtg[0,0,0] = running_rtg  # scaled
             episode_returns = 0
             env.reset()
@@ -310,11 +364,16 @@ def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, c
                 # end_fp = time.time()
                 # print(f"rebuttal: forward pass time: {end_fp - start_fp}")
 
-            op_traj_dict['states'] = states.cpu() # normalized
-            op_traj_dict['actions'] = actions.cpu()*2*np.pi
+            op_traj_dict['states'] = pred_states.cpu() # normalized
+            op_traj_dict['actions'] = pred_actions.cpu()*2*np.pi
             op_traj_dict['t_done'] = t_done
             op_traj_dict['n_tsteps'] = t+2
             op_traj_dict['success'] = reached_target
+            op_traj_dict['denorm_final_pos'] = denorm_final_pos
+            op_traj_dict['target_id'] = env.target_id # for redundancy
+            op_traj_dict['n_samples'] = count # TODO: check +1
+            op_traj_dict['flow_dir'] = flow_dir
+            op_traj_dict['pred_rtg'] = pred_rtg
             # op_traj_dict['mse'] = mse
             # op_traj_dict['all_att_mat'] = extract_attention_scores(model)
             # op_traj_dict['states_for_action_labels'] = None
@@ -458,7 +517,6 @@ def translate(model: torch.nn.Module, test_idx, test_dataloader, tr_set_stats, c
 
 """
 TODO:
-0. save to same wandb run as used in train (high) DONE
 1. Make args for running inference on train, test, val sets with tt_eb from cfg (low)
 2. override tt_eb from cfg using cmd line args (low)
 4. fix paper_plots for pptt
@@ -472,7 +530,7 @@ class inference:
     def __init__(self, args):
         self.args = args
         # load run cfg
-        cfg_path = join(args.log_exp_dir, "run_cfg.yml")
+        cfg_path = join(args.log_exp_dir, "wb_run_cfg.yml")
         cfg = read_cfg_file(cfg_path)
         cfg = convert_dict_to_obj(cfg)
         self.cfg = cfg
@@ -506,19 +564,20 @@ class inference:
 
         if hasattr(cfg, 'mae_model_name'):
             autoenc = torch.load(cfg.mae_model_name)
-            ae_type = 'mae'
+            encoding_type = 'mae'
         elif hasattr(cfg, 'tae_model_arch'):
             # autoenc = torch.load(cfg.tae_model_arch)
             # autoenc.load_state_dict(torch.load(cfg.tae_state_dict))
             from finetune_tinyautoencoder import TAESD, Clamp, Block, conv, Encoder, Decoder
             autoenc = TAESD()
-            ae_type = 'tae'
+            encoding_type = 'tae'
         else:
-            raise ValueError("Invalide cfg keys for autoencoder")   
+            autoenc = None
+            encoding_type = 'Yis'
         
         
-        env_predictor = torch.load(f"/{join(*cfg.env_predictor_name.split('/')[:-1])}/arch.pt")
-        env_predictor.load_state_dict(torch.load(cfg.env_predictor_name)['model_state_dict'])
+        env_predictor = torch.load(f"{cfg.env_predictor_name}/arch.pt")
+        env_predictor.load_state_dict(torch.load(f"{cfg.env_predictor_name}/best_vloss.pt")['model_state_dict'])
         
         idx_split, set_split = get_data_split(traj_dataset,
                                             split_ratio=self.split_ratio, 
@@ -527,16 +586,18 @@ class inference:
 
         us_train_traj_set, us_test_traj_set, us_val_traj_set = set_split
         us_train_idx_set, us_test_idx_set, us_val_idx_set = idx_split
-
-        us_test_traj_set = create_envEnc_dtDec_dataset(us_test_traj_set, 
+        us_test_traj_set = us_train_traj_set # TODO: remove
+        us_test_traj_set = create_envEnc_dtDec_dataset(us_test_traj_set, # TODO: why name it us_test.. when it is not so in train_pptt
                                 [None],
                                 cfg.context_len,
-                                autoenc,
                                 cfg.rtg_scale,
+                                autoenc=autoenc,
+                                encoding_type=encoding_type,
                                 norm_params_4_val = states_stats,
-                                ae_type=ae_type,
+                                LN=cfg.src_LN_in_dataloader,
                                 device=device)
-        self.test_dataloader = DataLoader(us_test_traj_set, batch_size=1, shuffle=True)
+        # us_test_traj_set = us_test_traj_set[0]
+        self.test_dataloader = DataLoader(us_test_traj_set, batch_size=1, shuffle=False)
 
         self.dataset_path = dataset_path
         self.inference_path = inference_path
@@ -545,13 +606,13 @@ class inference:
         self.states_stats_path = states_stats_path
         self.states_stats =states_stats
         self.us_test_traj_set = us_test_traj_set
-        self.dset = 'test' # hard coded. TODO: 
+        self.dset = 'train' # hard coded. TODO: change to test
         self.autoenc = autoenc
         self.env_predictor = env_predictor
 
 
 
-    def load_and_translate(self,closed_loop_translation=True):
+    def load_and_translate(self):
 
         args = self.args
         cfg = self.cfg
@@ -564,41 +625,51 @@ class inference:
         model_state_dict_path = join(args.log_exp_dir, args.model_state)
         transformer.load_state_dict(torch.load(model_state_dict_path)['model_state_dict'])
 
+        # TODO: check if context_len of env_predictor and pptt are same
+        # assert()
+        
         # TODO: save to same wandb run as used in train (Shubham)
         wandb.init(project = "envEnc_dtDec",id = cfg.wb_id, resume=True)
         wandb.log({'test': 100})
-
-        print(f"\n----- {closed_loop_translation=} ------\n")
-        if closed_loop_translation:
+        suffix = ''
+        print(f"\n----- {args.closed_loop_translate=} ------\n")
+        if args.closed_loop_translate:
             op_traj_dict_list, results = closed_loop_tranlsate(transformer,None, self.test_dataloader, 
                                                 self.states_stats, cfg, 
                                                 autoenc=self.autoenc,
                                                 env_predictor=self.env_predictor,
-                                                earlybreak=10)
+                                                earlybreak=args.early_break)
+            suffix = 'cl_loop'
         else:
             op_traj_dict_list, results = translate(transformer,None, self.test_dataloader, 
-                                                    self.states_stats, cfg, earlybreak=10)
-                   
+                                                    self.states_stats, cfg, earlybreak=args.early_break)
+            suffix = 'op_loop'
         # TODO: remove hardcode
         # translate_end_time = timer()
         # print(f"Translate runtime = {(translate_end_time - translate_start_time):.3f}s")
-
-        save_object(op_traj_dict_list, join(self.results_path, f"{self.dset}_op_traj_dict_list.pkl"))
-        save_object(results, join(self.results_path, f"{self.dset}_results.pkl"))
+        print(f" ----- Translate Results -----\n {results}\n")
+        save_object(op_traj_dict_list, join(self.results_path, f"{self.dset}_op_traj_dict_list_{suffix}.pkl"))
+        save_object(results, join(self.results_path, f"{self.dset}_results_{suffix}.pkl"))
 
         return
 
 
     def make_paper_plots(self):
-
-        # # TODO: load for viz only
-        op_traj_dict_list = load_pkl(join(self.results_path, f"{self.dset}_op_traj_dict_list.pkl"))
-        # results = load_pkl( join(self.results_path, f"{self.dset}_results.pkl"))
-
+        if args.closed_loop_translate:
+            suffix = 'cl_loop'
+        else:
+            suffix = 'op_loop'
+            
+        op_traj_dict_list = load_pkl(join(self.results_path, f"{self.dset}_op_traj_dict_list_{suffix}.pkl"))
+        # results = load_pkl( join(self.results_path, f"{self.dset}_results_{suffix}.pkl"))
+        # op_traj_dict_list = [item for item in op_traj_dict_list if item['target_id'] == 1]
         dummy_flow_dir = self.us_test_traj_set[0][-2]
         # intantiate gym env for vizualization purposes
-        env_4_viz = setup_env(dummy_flow_dir)
-        obs_mask = np.load(join(dummy_flow_dir, "obstacle_mask.npy"))
+        env_4_viz = setup_env(dummy_flow_dir, target_id=-1)
+        try:
+            obs_mask = np.load(join(dummy_flow_dir, "obstacle_mask.npy"))
+        except:
+            obs_mask = np.zeros((env_4_viz.nT,env_4_viz.xlim, env_4_viz.ylim))
 
         states_mean, states_std = self.states_stats
         test_set_txy_preds = [d['states']*states_std + states_mean for d in op_traj_dict_list]
@@ -613,6 +684,9 @@ class inference:
                         "trajs_by_att": {"ts":[17,46, 70],"fname":"att"},
                         "att_heatmap":{"fname":"heatmap"},
                         "plot_val_ip_op":{"fname":"test_ip_op"},
+                        "plot_val_ip_op_target_specific":{"fname":"test_ip_op_target_specific"},
+                        "plot_specific_perlin_path":{"fname":"test_ip_op_target_specific_perlin_path"},
+                        "plot_val_ip_op_target_specific_not_successful":{"fname":"test_ip_op_target_specific_not_successful"},
                         "plot_trajs_ip_op":{"fname":"test_trajs_ip_op"},
                         "plot_actions":{"fname":"test_actions_ip_op"},
                         "plot_train_val_ip_op":{"fname":"plot_train_val_ip_op"},
@@ -625,9 +699,15 @@ class inference:
                             # save_dir=join(self.results_path, "temp_test")
                             save_dir=self.results_path 
                             )
-        
-        pp.plot_val_ip_op(self.us_test_traj_set, obs_mask[1,:], test_set_txy_preds, path_lens, success_list)
-
+        # pp.plot_val_ip_op(self.us_test_traj_set, obs_mask[1,:], test_set_txy_preds, path_lens, success_list)
+        # pp.plot_val_ip_op_target_specific(self.us_test_traj_set, obs_mask[1,:],target_id=0,target_denorm=np.array([40., 40.]))
+        # pp.plot_val_ip_op_target_specific(self.us_test_traj_set, obs_mask[1,:],target_id=1,target_denorm=np.array([35., 25.]))
+        # pp.plot_val_ip_op_target_specific(self.us_test_traj_set, obs_mask[1,:],target_id=2,target_denorm=np.array([25., 35.]))
+        # pp.plot_val_ip_op_target_specific_not_successful(self.us_test_traj_set, obs_mask[1,:],target_id=0,target_denorm=np.array([40., 40.]))
+        # pp.plot_val_ip_op_target_specific_not_successful(self.us_test_traj_set, obs_mask[1,:],target_id=1,target_denorm=np.array([35., 25.]))
+        # pp.plot_val_ip_op_target_specific_not_successful(self.us_test_traj_set, obs_mask[1,:],target_id=2,target_denorm=np.array([25., 35.]))
+        pp.plot_success_non_success(self.us_test_traj_set, obs_mask[1,:])
+        # pp.plot_specific_perlin_path(self.us_test_traj_set, obs_mask[1,:],target_id=2,target_denorm=np.array([25., 35.]))
         return
 
         # pp.plot_trajs_ip_op(us_test_traj_set, test_set_txy_preds, path_lens, success_list)
@@ -710,7 +790,13 @@ if __name__ == "__main__":
     # log/exp_dir cotains model, train config, saved_states
     # plots from translate will be stored in the same dir
     # def_log_exp_dir = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_GPT_DG3_model_10-30-15-12-47"
-    def_log_exp_dir = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_GPT_DG3_model_12-04-17-05-45"
+    # def_log_exp_dir = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_Perlin_model_03-20-15-49-38"
+    # def_log_exp_dir='/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_Perlin_model_04-01-17-14-29'
+    # def_log_exp_dir='/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_Perlin_model_04-02-14-27-42'
+    # def_log_exp_dir='/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_Perlin_model_04-01-17-13-54'
+    # def_log_exp_dir = '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_Perlin_model_04-04-15-09-52'
+    # def_log_exp_dir = '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_Perlin_model_04-09-13-43-51'
+    def_log_exp_dir = '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/my_EnvE_DtD_Perlin_model_04-10-13-31-44'
     
     print(f"cuda available: {torch.cuda.is_available()}")
     parser = argparse.ArgumentParser()
@@ -723,6 +809,8 @@ if __name__ == "__main__":
     parser.add_argument('--test_data', type=str, default=None) 
     # use to re-plot without translating again
     parser.add_argument('--plot_only', type=bool, default=False)
+    parser.add_argument('--closed_loop_translate', type=bool, default=False)
+    parser.add_argument('--early_break', type=int, default=10**2)
     args = parser.parse_args()
 
     infer = inference(args)  

@@ -1,0 +1,138 @@
+program: train_pptt.py
+method: grid
+name: envEnc_dtDec_sweep 
+project: envEnc_dtDec
+metric: 
+  name: val_loss
+  goal: minimize
+
+parameters:
+  env_name:
+    value: "gym_examples/contGrid-v5_2"
+  state_dim:
+    value: 3
+  action_dim:
+    value: 1
+  action_range:
+    value: [0, 6.28318]
+  F:
+    value: 0.115
+  vel_field:
+    value: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/data/DG3/raw_data/nT_120" 
+  del_t:
+    value: 1.
+  scale_velocity:
+    value: True
+  vmax_by_F:
+    value: 1.174
+  space_scale:
+    value: 1
+  target_radius:
+    value: 2
+  rtg_scale:
+    value: 100
+  add_transition_noise_during_inf:
+    value: False
+  noise_var:
+    value: [0.1,0]
+
+  dataset_name:
+    value: "Perlin"
+  dataset_path:
+    value: "/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets_paths/gathered_7_100_withr_nm40_new/gathered_7_100_withr_nm40_new.pkl"
+  log_dir:
+    value: "log"
+  params2_name:
+    value: " "
+  env_predictor_name:
+    value: "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_Perlin_model_03-19-13-56.pt"
+
+  random_split:
+    value: True
+  split_tr_tst_val:
+    value: [0.7, 0.1, 0.2]
+  split_ran_seed:
+    value: 40
+  num_workers:
+    value: 4
+
+  device:
+    value: 'cuda'
+  batch_size:
+    value: 32
+  loss_type:
+    values: ["mean_norm_of_vec_diff", "mse_over_angle", "cosine_similarity", "cos_diff"]
+  optimizer_name:
+    value: 'AdamW'
+  num_epochs: 
+    value: 200
+  lr: 
+    values: [0.01, 0.005, 0.0001, 0.0005] 
+  final_lr: 
+    values: [0.00001, 0.00005] 
+  wt_decay: 
+    value: 0 
+  dropout_p: 
+    value: 0 
+  break_training: 
+    value: 200
+  grad_clip: 
+    value: 10
+  matmul_precision: 
+    value: 'high'     
+  use_fabric: 
+    value: False
+  add_target_loss: 
+    value: False
+  warmup_steps: 
+    value: 10000
+  src_LN_in_dataloader: 
+    value: True
+
+  use_scheduler: 
+    value: True
+  stepLR_stepsize: 
+    value: 1
+
+  pos_encoding_type: 
+    value: 'simple' 
+  num_encoder_layers: 
+    value: 8
+  num_decoder_layers: 
+    value: 8
+  context_len: 
+    value: 63
+  embed_dim: 
+    value: 96
+  n_heads: 
+    value: 12
+  action_activation: 
+    value: 'sigmoid'
+  eval_inerval: 
+    value: 2
+  chkpt_interval: 
+    value: 25
+  chkpt_list: 
+    value: []
+  translate_earlybreaks: 
+    value: [2, 2, 2] 
+  desired_rtg: 
+    value: 60  
+  cheat_RTG: 
+    value: True
+
+  viz_input: 
+    value: False
+  sim_tgt_actions: 
+    value: False 
+  viz_break_at: 
+    value: 100
+  plot_grads_k_freq_ep_intvl: 
+    value: [1,5] 
+
+
+
+
+  
+  
+ 

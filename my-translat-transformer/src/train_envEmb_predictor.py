@@ -4,7 +4,7 @@ from custom_models import Transformer_causal_encoder
 import pickle
 from src_utils import create_env_emb_dataset, get_data_split, see_steplr_trend
 from src_utils import checkpoint_model
-from mae_all_data_load import plot_vel_field_decoder, GiveMe_loaders, load_vel, VelocityDataset
+from mae_all_data_load import plot_vel_field_decoder
 from utils import read_cfg_file, load_pkl, print_dict, save_object, make_dir, save_yaml, convert_dict_to_obj
 from Class_optimsAndScheds import Optims_Scheds
 from torch.utils.data import DataLoader
@@ -18,14 +18,14 @@ from root_path import ROOT
 from timeit import default_timer as timer
 from finetune_tinyautoencoder import TAESD, Block, Clamp, conv, Encoder, Decoder
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import random
-
+import os
 
 """
 TODOs;
 1. See if scheduler can be applied at update level
 2. use cosw scheduler and see results
-3.
 """
 
 wandb.login()
@@ -47,7 +47,7 @@ def train_epoch(model, optimizer, train_dataloader, cfg, scheduler=None, log_int
         loss = F.mse_loss(logits, tgt)
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 4)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
         optimizer.step()
         # TODO: See if scheduler can be applied at update level
         avg_loss = avg_loss + ((loss.item() - avg_loss)/(count+1))
@@ -127,7 +127,7 @@ def translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg, ear
             tgt = env_reps[:, 1:, :].to(cfg.device)
             preds = torch.zeros((1, cfg.context_len, tgt.shape[2]),dtype=torch.float32, device=cfg.device)
             dyn_inputs = torch.zeros((1, cfg.context_len, tgt.shape[2]),dtype=torch.float32, device=cfg.device)
-            padding_mask = torch.ones((1,cfg.context_len)).type(torch.bool).to(cfg.device)
+            padding_mask = torch.ones((1, cfg.context_len)).type(torch.bool).to(cfg.device)
  
             loss_post_t = []
             for i in range(1, cfg.context_len-1):
@@ -147,14 +147,33 @@ def translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg, ear
 
     return set_output, avg_results
 
-def plot_translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg, earlybreak=10**8):
+
+def autoreg_translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg, nT, earlybreak=10**8):
+    """
+    Autoregressive translation function for a given model and test dataset.
+    
+    Args:
+        model (torch.nn.Module): The neural network model to use for translation.
+        test_idx: Index of the test data.
+        test_set: The test dataset to translate.
+        tr_set_stats: Statistics of the training set.
+        cfg: Configuration settings.
+        nT: Number of timesteps in the vel files.
+        earlybreak: Early stopping criteria (default is 10^8).
+        
+    Returns:
+        List: A list of tuples containing predictions and targets.
+    """
     model.eval()
     count = 0           # keeps count of total episodes
     test_dataloader = DataLoader(test_set, batch_size=1, shuffle=False)
     set_output = []
     full_time_mse_list = []
-    i_list = [90, 100, 110]
+    i_list = [25, 50]
+    # i_list = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
     preds_list = [] # contains tuples of format (flow_dir, rzn, i,preds_post_i(obs_till_i),tgts_post_i )
+    cl = cfg.context_len
+    assert nT <= cl - 1
     with torch.no_grad():
         # for sample in range(len(test_set)):
         for timesteps, env_reps, traj_mask, idx, flow_dir, rzn in test_dataloader:
@@ -168,68 +187,240 @@ def plot_translate(model: torch.nn.Module, test_idx, test_set, tr_set_stats, cfg
                 break
             src = env_reps[:, :-1, :].to(cfg.device)
             tgt = env_reps[:, 1:, :].to(cfg.device)
-            preds = torch.zeros((1, cfg.context_len, tgt.shape[2]),dtype=torch.float32, device=cfg.device)
+            # preds = torch.zeros((1, cfg.context_len, tgt.shape[2]),dtype=torch.float32, device=cfg.device)
             dyn_inputs = torch.zeros((1, cfg.context_len, tgt.shape[2]),dtype=torch.float32, device=cfg.device)
             padding_mask = torch.ones((1,cfg.context_len)).type(torch.bool).to(cfg.device)
  
             loss_post_t = []
-            for i in range(1, cfg.context_len-1):
+            # for i in range(1, cl-1):
+            for i in i_list:
+                dyn_inputs[:,:,:] = 0
+                padding_mask[:,:] = True
                 dyn_inputs[0,0:i,:] = src[0,0:i,:] # dyn_inputs start with env data observed till i
                 padding_mask[0,:i] = False
-                for p in range(i, cfg.context_len-1):
-                    padding_mask[0,p-1] = False
+                for p in range(i, nT):
+                    padding_mask[0,p-1] = False # redundant in first iteration
                     ag_pred_at_p = model(timesteps, dyn_inputs, padding_mask=padding_mask)[0,p-1]
                     dyn_inputs[0,p,:] = ag_pred_at_p
+                    # print()
                 # IMP_NOTE: dyn_inputs contains observed embs till timestep i (exclusive)
-                #                      contains autoregressive predictions from i (inclusive) to context_len-1    
-                loss_post_t.append(F.mse_loss(dyn_inputs[0,i:,:],tgt[0,i:,:]))
-                if i in i_list:
-                    preds_list.append((flow_dir, rzn, i, dyn_inputs[0,i:,:], tgt[0,i:,:]))
+                #                      and contains autoregressive predictions from i (inclusive) to context_len-1    
+                loss_post_t.append(F.mse_loss(dyn_inputs[0,i:nT+1,:],tgt[0,i-1:nT,:]))
+                # if i in i_list:
+                preds_list.append((flow_dir, rzn, i, dyn_inputs[0,i:,:], tgt[0,i-1:-1,:])) # eg. dyn_inputs[0,3:,:] is [e'3, e'4, ...] tgt[0,2:-1,:] is [e3, e4, ...]
     return preds_list
+     
+            
+def plot_pred_target(samples, preds_image, target_image, i, fname, fname2, fname3, log_exp_dir, dataset_name):
+    # preds_image and target_image are now = [ (t, vx_t, vy_t), (), ...] where vx_t and vy_t have shape (gsize,gsize)
+    # TODO: SHUBHAM. need to change indices based on new format for preds_image and target_image
+
+    # samples = np.arange(i, 122, 3) 
+    mse_list = []
+    #samples = [100, 103, 106, 109, 112 ..121]
+    # i = 100
+    # pred_id = [0, 3, .... 21]
+    for s in range(len(samples)):
+        r = pred_id = s - i # pred_image and target_image are of len = context_len - obs_len (i.e i)
+        r = s
+        fig_i_path = log_exp_dir+"/"+f"figs/i_{i}"
+        if not os.path.exists(fig_i_path):
+            os.makedirs(fig_i_path)
+            print(f"Directory created: {fig_i_path}")
+        else:
+            print(f"Directory already exists: {fig_i_path}")
+        if dataset_name =='Perlin':
+            vx_pred = preds_image[r][1]
+            vy_pred = preds_image[r][2]
+            third_ch_pred = np.zeros_like(vx_pred)
+            vx_target = target_image[r][1]
+            vy_target = target_image[r][2]  
+            third_ch_target = np.zeros_like(vx_pred)
+            preds_image_stacked = np.stack((vx_pred, vy_pred), axis=0)
+            target_image_stacked = np.stack((vx_target, vy_target), axis=0)  
+            abs_difference = np.abs(target_image_stacked - preds_image_stacked)
+            mse_loss = np.mean((target_image_stacked - preds_image_stacked)**2)      
+        else:
+            vx_pred = preds_image[r][0]
+            vy_pred = preds_image[r][1]
+            third_ch_pred = preds_image[r][2]
+            vx_target = target_image[r][0]
+            vy_target = target_image[r][1]
+            third_ch_target = target_image[r][2]
+            abs_difference = np.abs(target_image[r] - preds_image[r])
+            mse_loss = np.mean((targ - pred)**2)
+            
+        plt.clf()
+        fig, axs = plt.subplots(1, 3, figsize=(15,5), gridspec_kw={'width_ratios': [1, 1, 1]})
+        vmin = min(np.min(vx_pred), np.min(vx_target))
+        vmax = max(np.max(vx_pred), np.max(vx_target))
+        ax = axs[0]
+        pred_im = plot_vel_field_decoder(ax, vmin, vmax, vx_pred, vy_pred, third_ch_pred, title_name=f"{fname}_t{samples[s]}") # flow_name=join(f"figs/i_{i}", fname+f"{r}"), path=log_exp_dir) r+i
+        divider = make_axes_locatable(ax)
+        cax_vel = divider.append_axes("right", size="5%", pad=0.1)
+        cax_vel.axis('off')
+        ax = axs[1]
+        target_im = plot_vel_field_decoder(ax, vmin, vmax, vx_target, vy_target, third_ch_target, title_name=f"{fname2}_t{samples[s]}") # flow_name=join(f"figs/i_{i}", fname2+f"{r}"), path=log_exp_dir)
+        divider = make_axes_locatable(ax)
+        cax_vel = divider.append_axes("right", size="5%", pad=0.1)
+        cbar = fig.colorbar(target_im, cax=cax_vel) #, ticks=np.linspace(vmin, vmax, 8)
+        cbar.set_label('Velocity')
+        ax = axs[2]
+        
+        vmag_difference = (abs_difference[0]**2 + abs_difference[1]**2)**0.5
+        mean_error = np.mean(vmag_difference)
+        vmin = np.min(vmag_difference)
+        vmax = np.max(vmag_difference)
+        difference = plot_vel_field_decoder(ax, vmin, vmax, np.abs(vx_target - vx_pred), np.abs(vy_target - vy_target), np.abs(third_ch_target - third_ch_pred), title_name=f"{fname3}_t{samples[s]};{mean_error=}") # flow_name=join(f"figs/i_{i}", fname+f"{r}") # flow_name=join(f"figs/i_{i}", fname2+f"{r}"), path=log_exp_dir)
+        # ax.set_title(f'env_emb_sample_preds_target_{r}')
+        # axs[0].imshow(pred_im)
+        # axs[0].set_title(fname+f"{r}")
+        # axs[1].imshow(target_im)
+        # axs[1].set_title(fname2+f"{r}")
+        # plt.tight_layout()
+        divider = make_axes_locatable(ax)
+        cax_vel = divider.append_axes("right", size="5%", pad=0.1)
+        cbar = fig.colorbar(difference, cax=cax_vel) #, ticks=np.linspace(vmin, vmax, 8)
+        cbar.set_label('Difference')                       
+        fig.tight_layout()
+        # resulting_image_path = log_exp_dir+"/"+f"figs/i_{i}/env_emb_sample_{r+i}"+".png"
+        resulting_image_path = log_exp_dir+"/"+f"figs/i_{i}/env_emb_sample_{samples[s]}"+".png"
+        plt.savefig(resulting_image_path)
+        
+        # targ = target_image
+        # pred = preds_image
+        # mse_loss = np.mean((targ - pred)**2)
+        mse_list.append(mse_loss)    
+    return mse_list
+
 
 def decode_plot(preds_list, log_exp_dir):
     # preds, targets = preds_list[0]
     fname = "env_emb_pred_sample_"
     fname2 = "env_emb_target_sample_"
+    fname3 = 'env_emb_difference'
     taesd = TAESD()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     taesd.to(device)
     taesd.eval()
+    mse_timestep = []
     for j in range(len(preds_list)):
         flow_dir, rzn, i, preds, targets = preds_list[j]
         with torch.no_grad():
-            preds_image = taesd.unscale_output(taesd.decoder(preds.view(preds.shape[0], 4, 16, 16).to(device)))
-            target_image = taesd.unscale_output(taesd.decoder(targets.view(targets.shape[0], 4, 16, 16).to(device)))
-        
-        samples = np.arange(i, 122, 3) 
-        #samples = [100, 103, 106, 109, 112 ..121]
-        # i = 100
-        # pred_id = [0, 3, .... 21]
-        for s in samples:
-            r = pred_id = s - i # pred_image and target_image are of len = context_len - obs_len (i.e i)
-            plt.clf()
-            fig, axs = plt.subplots(1, 2, figsize=(10,5))
-            ax = axs[0]
-            pred_im = plot_vel_field_decoder(ax,preds_image[r][0].cpu(), preds_image[r][1].cpu(), preds_image[r][2].cpu(), title_name=f"{fname}_t{r}") # flow_name=join(f"figs/i_{i}", fname+f"{r}"), path=log_exp_dir)
-            ax = axs[1]
-            target_im = plot_vel_field_decoder(ax, target_image[r][0].cpu(), target_image[r][1].cpu(), target_image[r][2].cpu(), title_name=f"{fname2}_t{r}") # flow_name=join(f"figs/i_{i}", fname2+f"{r}"), path=log_exp_dir)
-            # ax.set_title(f'env_emb_sample_preds_target_{r}')
-            # axs[0].imshow(pred_im)
-            # axs[0].set_title(fname+f"{r}")
-            # axs[1].imshow(target_im)
-            # axs[1].set_title(fname2+f"{r}")
-            # plt.tight_layout()
-            resulting_image_path = log_exp_dir+"/"+f"figs/i_{i}/env_emb_sample_{r}"+".png"
-            plt.savefig(resulting_image_path)
-            
-            
+            # preds_image = taesd.unscale_output(taesd.decoder(preds.view(preds.shape[0], 4, 16, 16).to(device)))
+            preds_image = taesd.unscale_output(taesd.decoder(preds.view(preds.shape[0], 4, 8, 8).to(device)))
+            # target_image = taesd.unscale_output(taesd.decoder(targets.view(targets.shape[0], 4, 16, 16).to(device)))
+            target_image = taesd.unscale_output(taesd.decoder(targets.view(targets.shape[0], 4, 8, 8).to(device)))
+            preds_image = preds_image.cpu().numpy()
+            target_image = target_image.cpu().numpy()
+            samples = np.arange(i, 62, 3)
+            mse_list = plot_pred_target(samples, preds_image, target_image, i, fname, fname2, fname3, log_exp_dir)
+        mse_timestep.append(mse_list)
+        print()       
+
+
+def load_velocity(flow_dir):
+    data_path = flow_dir[0]
+    all_u_mat = np.load(data_path +'/' +'all_u_mat.npy')
+    all_ui_mat = (np.load(data_path +'/' +'all_ui_mat.npy'))
+    all_v_mat = (np.load(data_path +'/' +'all_v_mat.npy'))
+    all_vi_mat = (np.load(data_path +'/' +'all_vi_mat.npy'))
+    all_Yi = np.load(data_path +'/' +'all_Yi.npy')
+    
+    return [all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, all_Yi]
+
+def extract_vel_seq_from_Yi_seq(Yi_pred_seq, Yi_tgt_seq, vel_field_data, t_start):
+    # make both sequences in this function
+    # Yi_seq can be preds or targets sequence
+    Yi_pred_seq = Yi_pred_seq.detach().cpu().numpy()
+    Yi_tgt_seq = Yi_tgt_seq.detach().cpu().numpy()
+    all_u_mat, all_v_mat, all_ui_mat, all_vi_mat, _ = vel_field_data
+    nT = all_u_mat.shape[0]
+    l, nmodes = Yi_pred_seq.shape # Yi_seq.shape = (1, l, nmodes)
+    v_pred_list = [ ]  # v_list = [ (vx, vy), (), ...] from tstart to tstart+l
+    v_tgt_list = [ ] # v_list for tgts
+    for t in range(t_start, nT, 3):
+        t_seq = t - t_start
+        vx_t_r_pred = all_u_mat[t] + np.sum([ all_ui_mat[t, m , :, :]*Yi_pred_seq[t_seq, m] for m in range(nmodes)], axis=0)
+        vy_t_r_pred = all_v_mat[t] + np.sum([ all_vi_mat[t, m , :, :]*Yi_pred_seq[t_seq, m] for m in range(nmodes)], axis=0)
+        vx_t_r_tgt = all_u_mat[t] +  np.sum([ all_ui_mat[t, m , :, :]*Yi_tgt_seq[t_seq, m] for m in range(nmodes)], axis=0)
+        vy_t_r_tgt = all_v_mat[t] +  np.sum([ all_vi_mat[t, m , :, :]*Yi_tgt_seq[t_seq, m] for m in range(nmodes)], axis=0)
+        v_pred_list.append((t, vx_t_r_pred, vy_t_r_pred))
+        v_tgt_list.append((t, vx_t_r_tgt, vy_t_r_tgt))
+    return v_pred_list, v_tgt_list
+
+
+def decode_plot_Yi_version(preds_list, log_exp_dir, dataset_name):
+    # preds, targets = preds_list[0]
+    fname = "env_emb_pred_sample_"
+    fname2 = "env_emb_target_sample_"
+    fname3 = 'env_emb_difference'
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    mse_timestep = []
+    for j in range(len(preds_list)):
+        flow_dir, rzn, t_start, preds, targets = preds_list[j] # t_start is the same as i
+        vel_field_data = load_velocity(flow_dir)
+        v_pred_list, v_tgt_list = extract_vel_seq_from_Yi_seq(preds,targets, vel_field_data, t_start)
+        samples = np.arange(t_start, 60, 10)
+        mse_list = plot_pred_target(samples, v_pred_list, v_tgt_list, t_start, fname, fname2, fname3, log_exp_dir, dataset_name)
+        mse_timestep.append((samples, mse_list))
+    return mse_timestep
+
+def mse_plot(mse_list, log_exp_dir):
+    x_values = [item[0] for item in mse_list]
+    y_values = [item[1] for item in mse_list]
+    plt.figure()
+    for i in range(len(x_values)):
+        plt.plot(x_values[i].tolist(), y_values[i])
+    plt.yscale('log')
+    plt.xlabel('Timestep')
+    plt.ylabel('MSE')
+    plt.title('MSE plot')
+    plt.grid(True)
+    plt.savefig(log_exp_dir+"/"+f"figs/mse_across_timesteps"+".png")
+    wandb.log({"MSE_plot" : wandb.Image(log_exp_dir+"/"+f"figs/mse_across_timesteps"+".png")})
+
+def line_plot(preds_list, log_exp_dir):
+    # for i in range(len(preds_list)):
+    flow_dir, rzn, t_start, preds, targets = preds_list[0]
+    for i in range(preds.shape[1]):
+        plt.cla()
+        fig, axs = plt.subplots(1, 4, figsize=(20,5))
+        axs[0].plot(preds[:,i].cpu())
+        axs[0].set_title('pred')
+
+        axs[1].plot(targets[:,i].cpu())
+        axs[1].set_title('targ')
+
+        diff = targets[:,i] - preds[:,i]
+        axs[2].plot(diff.cpu())
+        axs[2].set_title('diff')
+
+        rel_error = torch.abs((targets[:,i] - preds[:,i])/targets[:,i])
+        axs[3].plot(rel_error.cpu())
+        axs[3].set_title('rel error')
+
+        fig.suptitle(f'Feature {i}')
+        plt.tight_layout()
+        fig_path = log_exp_dir+"/"+f"figs/i_{t_start}_line_error/"
+        if not os.path.exists(fig_path):
+            os.makedirs(fig_path)
+            print(f"Directory created: {fig_path}")
+        else:
+            print(f"Directory already exists: {fig_path}")
+        plt.savefig(log_exp_dir+"/"+f"figs/i_{t_start}_line_error/emb_line_error{i}"+".png")
+        wandb.log({"Line and Error plot" : wandb.Image(log_exp_dir+"/"+f"figs/i_{t_start}_line_error/emb_line_error{i}"+".png")})
 
 
 def load_and_translate(args): 
+    # wandb.init(project = "envEnc_dtDec",id = cfg.wb_id, resume=True)
     
     cfg_path = join(args.log_exp_dir, "run_cfg.yml")
     cfg = read_cfg_file(cfg_path)
     cfg = convert_dict_to_obj(cfg)
+    
+    # wandb_exp_name = "emb_env_td_" + dataset_name + "__" + start_time_str
+    wandb.init(project="td_emb", id = cfg.wb_id, resume=True)
     
     # Load model architecture
     model_path = join(args.log_exp_dir, "arch.pt")
@@ -240,18 +431,24 @@ def load_and_translate(args):
     transformer.load_state_dict(torch.load(model_state_dict_path)['model_state_dict'])
     
     # Load and Split dataset
-    emb_dataset = load_pkl(cfg.dataset_path)[0:62499]
-    idx_split, set_split = get_data_split(emb_dataset,
-                                        split_ratio=cfg.split_tr_tst_val, 
-                                        random_seed=cfg.split_ran_seed, 
-                                        random_split=cfg.random_split)
-    train_emb_set, test_emb_set, val_emb_set = set_split
-    train_idx_set, test_idx_set, val_idx_set = idx_split
+    # emb_dataset = load_pkl('/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Gathered_datasets/gathered_5_30/gathered_rep_5_30_tiny_autoencoder.pkl')
+    # emb_dataset = load_pkl(cfg.dataset_path)
+    # idx_split, set_split = get_data_split(emb_dataset,
+    #                                     split_ratio=cfg.split_tr_tst_val, 
+    #                                     random_seed=cfg.split_ran_seed, 
+    #                                     random_split=cfg.random_split)
+    # _, test_emb_set, _ = set_split
+    # _, test_idx_set, _ = idx_split
+    test_emb_set = load_pkl(os.path.join(args.log_exp_dir, "test_emb_set.pkl"))
+    test_idx_set = load_pkl(os.path.join(args.log_exp_dir, "test_idx_set.pkl"))
     test_set = create_env_emb_dataset(test_emb_set, test_idx_set, cfg.context_len)
-    preds_list = plot_translate(transformer, test_idx_set, test_set, None, 
-                                                    cfg, earlybreak=cfg.translate_earlybreaks[0])
-    decode_plot(preds_list, args.log_exp_dir)
-    
+    _, _, _, _, flow_dir, _ =  test_set[0]
+    nT = load_velocity([flow_dir])[0].shape[0]
+    preds_list = autoreg_translate(transformer, test_idx_set, test_set, None, 
+                                                    cfg, nT, earlybreak=cfg.translate_earlybreaks[0])
+    mse_across_timestep = decode_plot_Yi_version(preds_list, args.log_exp_dir, cfg.dataset_name)
+    mse_plot(mse_across_timestep, args.log_exp_dir)
+    line_plot(preds_list, args.log_exp_dir)
     
     return None
     
@@ -265,8 +462,11 @@ def train_model(args=None, cfg_name=None):
 
     dataset_name = config['dataset_name']
     wandb_exp_name = "emb_env_td_" + dataset_name + "__" + start_time_str
+    wb_id = wandb.util.generate_id()
+    config['wb_id'] = wb_id
     wandb.init(project="td_emb",
                 name = wandb_exp_name,
+                id = wb_id,
                 config = config    
                 )
 
@@ -296,13 +496,15 @@ def train_model(args=None, cfg_name=None):
     print("model save path: " + model_save_dir)
     
     # Load and Split dataset
-    emb_dataset = load_pkl(cfg.dataset_path)[0:62499]
+    emb_dataset = load_pkl(cfg.dataset_path)
     idx_split, set_split = get_data_split(emb_dataset,
                                         split_ratio=cfg.split_tr_tst_val, 
                                         random_seed=cfg.split_ran_seed, 
                                         random_split=cfg.random_split)
     train_emb_set, test_emb_set, val_emb_set = set_split
     train_idx_set, test_idx_set, val_idx_set = idx_split
+    save_object(test_emb_set, os.path.join(model_save_dir, "test_emb_set.pkl"))
+    save_object(test_idx_set, os.path.join(model_save_dir, "test_idx_set.pkl"))
     tr_set = create_env_emb_dataset(train_emb_set, train_idx_set, cfg.context_len)
     val_set = create_env_emb_dataset(val_emb_set, val_idx_set, cfg.context_len)
     test_set = create_env_emb_dataset(test_emb_set, test_idx_set, cfg.context_len)
@@ -420,7 +622,7 @@ def train_model(args=None, cfg_name=None):
         else:
             if epoch in chkpt_list:
                 # Evaluation by translation   
-                print("translating")
+                print("translating (NOT Autoregressive)")
                 _, tr_avg_results = translate(transformer, train_idx_set, tr_set, None, 
                                                     cfg, earlybreak=tt_eb[0])
                 _, val_avg_results = translate(transformer, val_idx_set, tr_set, None, 
@@ -465,8 +667,15 @@ def train_model(args=None, cfg_name=None):
 
 
 if __name__ == "__main__":
-    def_log_exp_dir = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_DG3_model_11-24-11-07.pt"
-    
+    #  def_log_exp_dir only used for load_and_translate()
+    # def_log_exp_dir = "/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_DG3_model_11-24-11-07.pt"
+    # def_log_exp_dir= '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_DG3_model_12-14-14-44.pt'
+    # def_log_exp_dir = '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_DG3_model_12-14-15-37.pt'
+    # Path for loading trained model
+    # def_log_exp_dir = '/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_Perlin_model_01-16-23-19.pt'
+    # def_log_exp_dir ='/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_Perlin_model_03-13-12-35.pt'
+    # def_log_exp_dir='/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_Perlin_model_03-14-13-13.pt'
+    def_log_exp_dir='/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/log/EmbFcast_Perlin_model_03-20-12-43.pt'
     print(f"cuda available: {torch.cuda.is_available()}")
     
     parser = argparse.ArgumentParser()

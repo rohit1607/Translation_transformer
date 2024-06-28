@@ -29,9 +29,28 @@ import tqdm
 from utils import execution_time
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+from lightning.fabric import Fabric
 # from GPT_paper_plots import paper_plots
 
 wandb.login()
+
+
+def mse_over_angle(pred, tgt):
+    return F.mse_loss(pred, tgt, reduction='mean')
+
+def cos_diff(pred, tgt):
+    return 1 - torch.mean(torch.cos((pred - tgt)*2*torch.pi))
+
+def mean_norm_of_vec_diff(pred, tgt, cfg):
+    logits_vec2d = convert_angle_to_vectors(pred, device=cfg.device)
+    tgt_out_vec2d = convert_angle_to_vectors(tgt, device=cfg.device)
+    loss = torch.mean(torch.linalg.norm(logits_vec2d - tgt_out_vec2d,axis=1)/(2*torch.pi))
+    return loss
+
+def cosine_similarity(pred, tgt, cfg):
+    logits_vec2d = convert_angle_to_vectors(pred, device=cfg.device)
+    tgt_out_vec2d = convert_angle_to_vectors(tgt, device=cfg.device)
+    return 1- torch.mean(-F.cosine_similarity(logits_vec2d, tgt_out_vec2d, dim=-1))
 
 DATASET_CREATION_MAP = {
                         # "DOLS": create_action_dataset_v2,
@@ -43,6 +62,8 @@ DATASET_CREATION_MAP = {
 #       2.  can write another function to return optimzer - see class_optimsAndScheds.py
 #       3.  Figure out scale_velocity issue # Done, False when processing and in trasnlating as well
 #       5.  Better scheduling behaviour possible? step() at update instead of epoch?
+
+
 @execution_time
 def check_dataloader_time(model, optimizer, train_dataloader, cfg, args, scheduler=None, log_interval=50, transfer=False):
     model.train()
@@ -117,25 +138,37 @@ def check_dataloader_time(model, optimizer, train_dataloader, cfg, args, schedul
 
 
 @execution_time
-def train_epoch(model, optimizer, train_dataloader, cfg, args, scheduler=None, log_interval=50):
+def train_epoch(model, optimizer, train_dataloader, cfg, args, epoch, fabric, scheduler=None, log_interval=50, plot_grad_k_ep=None):
+    """
+    plot_grad_k_ep =  (k_freq, ep_freq) 
+    """
     model.train()
     device = cfg.device
     avg_loss = torch.tensor(0).to(device)
     loss = None
     count = torch.tensor(0).to(device)
+    l = len(train_dataloader)
+
+    if plot_grad_k_ep is not None:
+        k_freq, ep_intvl = plot_grad_k_ep
+        k_intvl =  l // k_freq
     # for env_coef_seq, tgt in train_dataloader:
     # timesteps, actions, states, rtg, action_mask, target_state, encoder_input, n, idx, flow_dir, rzn
     for k, (timesteps, actions, states, rtg, action_mask, final_pos, encoder_input, tgt_padding_mask, n, idx, flow_dir, rzn) in enumerate(tqdm.tqdm(train_dataloader)):
-        timesteps = timesteps.to(device)    # B x T                (,121)
-        states = states.to(device)          # B x T x state_dim  (,122,3)
-        rtg = rtg.to(device) # B x T x 1                        (,121)
-        action_mask = action_mask.to(device)    # B x T           (,121)
-        encoder_input = encoder_input.to(device)#                (,120,768)
-        final_pos = final_pos.to(device)        #                    (,2)
+   
+        action_target = torch.clone(actions).detach()
         act_dim = actions.shape[-1]
-        actions = actions.to(device)             #                   (,121)
-        action_target = torch.clone(actions).detach().to(device)
-        tgt_padding_mask = tgt_padding_mask.to(device)
+        if not cfg.use_fabric:
+            timesteps = timesteps.to(device)    # B x T                (,121)
+            states = states.to(device)          # B x T x state_dim  (,122,3)
+            rtg = rtg.to(device) # B x T x 1                        (,121)
+            action_mask = action_mask.to(device)    # B x T           (,121)
+            encoder_input = encoder_input.to(device)#                (,120,768)
+            final_pos = final_pos.to(device)        #                    (,2)
+            actions = actions.to(device)             #                   (,121)
+            action_target = action_target.to(device)
+            tgt_padding_mask = tgt_padding_mask.to(device)
+        
         action_preds = model.forward(   src=encoder_input,
                                         tgt_states=states,
                                         tgt_actions=actions,
@@ -155,16 +188,25 @@ def train_epoch(model, optimizer, train_dataloader, cfg, args, scheduler=None, l
         
         # loss = F.mse_loss(action_preds, action_target, reduction='mean')
         if cfg.loss_type == 'mse_over_angle':
-            loss = F.mse_loss(action_preds, action_target, reduction='mean')
+            loss = mse_over_angle(action_preds, action_target)
         elif cfg.loss_type == 'mean_norm_of_vec_diff':
-            logits_vec2d = convert_angle_to_vectors(action_preds, device=cfg.device)
-            tgt_out_vec2d = convert_angle_to_vectors(action_target, device=cfg.device)
-            loss = torch.mean(torch.linalg.norm(logits_vec2d - tgt_out_vec2d,axis=1)/(2*torch.pi))
+            loss = mean_norm_of_vec_diff(action_preds, action_target, cfg)
+        elif cfg.loss_type == 'cosine_similarity':
+            loss = cosine_similarity(action_preds, action_target, cfg)
+        elif cfg.loss_type == 'cos_diff':
+            loss = cos_diff(action_preds, action_target)
+        else:
+            raise NotImplementedError
         
         optimizer.zero_grad()
-        loss.backward()
-        # plot_grad_flow(model.named_parameters())
+        if cfg.use_fabric:
+            fabric.backward(loss)
+        else:
+            loss.backward()
+
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+        if plot_grad_k_ep is not None and k % k_intvl == 0 and epoch % ep_intvl == 0:
+            plot_grad_flow(model.named_parameters(), title_suffix=f"@update_{k}/{l}_ep{epoch}") 
         optimizer.step()
         # scheduler.step()
         
@@ -181,9 +223,13 @@ def train_epoch(model, optimizer, train_dataloader, cfg, args, scheduler=None, l
                         # "in_eval/MAX_param_norm": max_norm,
                         # "in_eval/MIN_param_norm": min_norm,
                         # "in_eval/AVG_param_norm": mean_norm,
+                        f"mean_grad_w": torch.sum(model.embed_state.weight.grad),
+                        f"mean_w": torch.sum(model.embed_state.weight),
                        })
         count += 1
-
+        
+    # plot_grad_flow(model.named_parameters())
+    wandb.log({"grads": wandb.Image("/home/rohit/Documents/Research/Planning_with_transformers/Translation_transformer/my-translat-transformer/tmp/grads.png")})
     all_att_mats = None
     return avg_loss, all_att_mats
 
@@ -227,12 +273,15 @@ def evaluate(model, val_dataloader, cfg, log_interval=10):
             
             # loss = F.mse_loss(action_preds, action_target, reduction='mean')
             if cfg.loss_type == 'mse_over_angle':
-                loss = F.mse_loss(action_preds, action_target, reduction='mean')
+                loss = mse_over_angle(action_preds, action_target)
             elif cfg.loss_type == 'mean_norm_of_vec_diff':
-                logits_vec2d = convert_angle_to_vectors(action_preds, device=cfg.device)
-                tgt_out_vec2d = convert_angle_to_vectors(action_target, device=cfg.device)
-                loss = torch.mean(torch.linalg.norm(logits_vec2d - tgt_out_vec2d,axis=1)/(2*torch.pi))
-            
+                loss = mean_norm_of_vec_diff(action_preds, action_target, cfg)
+            elif cfg.loss_type == 'cosine_similarity':
+                loss = cosine_similarity(action_preds, action_target, cfg)
+            elif cfg.loss_type == 'cos_diff':
+                loss = cos_diff(action_preds, action_target)
+            else:
+                raise NotImplementedError
             # losses += loss.item()
             avg_loss = avg_loss + ((loss - avg_loss)/(count+1))
             # if count%log_interval == 0:
@@ -258,16 +307,37 @@ def train_model(args=None, cfg_name=None):
         dataset_name = NAME_MAP[ARGS_CFG] #for sweep mode
 
     wandb_exp_name = "envEnc_dtDec_" + dataset_name + "__" + start_time_str
-    wb_id = wandb.util.generate_id()
-    config['wb_id'] = wb_id
-    wandb.init(project = "envEnc_dtDec",
-                name = wandb_exp_name,
-                config=config,
-                id = wb_id,
-                resume = "allow")
+    if args is not None:
+        wb_id = wandb.util.generate_id()
+        config['wb_id'] = wb_id
+        wandb.init(project = "envEnc_dtDec",
+                    name = wandb_exp_name,
+                    config=config,
+                    id = wb_id,
+                    resume = "allow")
+    else:
+        wandb.init(project = "envEnc_dtDec",
+                    name = wandb_exp_name,
+                    config=config,)
+        
+    if not config: # For sweep mode -> since config is set to default ({ }) we have to fill it again from wandb
+        wb_id = wandb.run.get_url()[-8:]
+        api = wandb.Api()
+        run = api.run(f"wandb-iisc/dt/runs/{wb_id}")
+        config = run.config
+        config['wb_id'] = wb_id
+
     cfg=wandb.config
     # params2 = read_cfg_file(cfg_name=join(ROOT,cfg.params2_name))
 
+    if cfg.use_fabric:
+        fabric = Fabric(accelerator='cuda', precision="16-mixed")
+        fabric.launch()
+    else:
+        fabric = None
+        
+    if hasattr(cfg, 'matmul_precision'):
+        torch.set_float32_matmul_precision(cfg.matmul_precision)   
     lr = cfg.lr    
     num_epochs = cfg.num_epochs
     context_len = cfg.context_len     # K in decision transformer
@@ -308,15 +378,16 @@ def train_model(args=None, cfg_name=None):
 
     if hasattr(cfg, 'mae_model_name'):
         autoenc = torch.load(cfg.mae_model_name)
-        ae_type = 'mae'
+        encoding_type = 'mae'
     elif hasattr(cfg, 'tae_model_arch'):
         # autoenc = torch.load(cfg.tae_model_arch)
         # autoenc.load_state_dict(torch.load(cfg.tae_state_dict))
         from finetune_tinyautoencoder import TAESD, Clamp, Block, conv, Encoder, Decoder
         autoenc = TAESD()
-        ae_type = 'tae'
+        encoding_type = 'tae'
     else:
-        raise ValueError("Invalide cfg keys for autoencoder")
+        autoenc = None
+        encoding_type = 'Yis'
     idx_split, set_split = get_data_split(traj_dataset,
                                         split_ratio=cfg.split_tr_tst_val, 
                                         random_seed=cfg.split_ran_seed, 
@@ -328,9 +399,10 @@ def train_model(args=None, cfg_name=None):
     tr_set = create_envEnc_dtDec_dataset(train_traj_set, 
                                    train_idx_set,
                                    context_len,
-                                   autoenc,
                                    cfg.rtg_scale,
-                                   ae_type=ae_type,
+                                   autoenc=autoenc,
+                                   encoding_type=encoding_type,
+                                   LN=cfg.src_LN_in_dataloader,
                                    device = device)
     states_stats = tr_set.get_states_stats()
     states_stats_path = join(model_save_dir,"states_stats.npy")
@@ -339,20 +411,22 @@ def train_model(args=None, cfg_name=None):
     val_set = create_envEnc_dtDec_dataset(val_traj_set, 
                             val_idx_set,
                             context_len,
-                            autoenc,
                             cfg.rtg_scale,
+                            autoenc=autoenc,
                             norm_params_4_val = states_stats,
-                            ae_type=ae_type,
+                            encoding_type=encoding_type,
+                            LN=cfg.src_LN_in_dataloader,
                             device = device)
 
     # TODO: can remove this later
     test_set = create_envEnc_dtDec_dataset(test_traj_set, 
                             test_idx_set,
                             context_len, 
-                            autoenc,
                             cfg.rtg_scale,
+                            autoenc=autoenc,
                             norm_params_4_val = states_stats,
-                            ae_type=ae_type,
+                            encoding_type=encoding_type,
+                            LN=cfg.src_LN_in_dataloader,
                             device = device)
    
     tr_dataloader = DataLoader(tr_set, batch_size=cfg.batch_size, shuffle=True) #, num_workers=cfg.num_workers)
@@ -389,7 +463,11 @@ def train_model(args=None, cfg_name=None):
                 nhead=cfg.n_heads,
                 dropout=cfg.dropout_p,
                 positional_encoding=cfg.pos_encoding_type,
-                                                ).to(device)
+                action_activation=cfg.action_activation,
+                                                            )#.to(device)
+    if not cfg.use_fabric:
+        transformer =  transformer.to(device)
+                                                
     
     if cfg.optimizer_name == 'AdamW':
         optimizer = torch.optim.AdamW(
@@ -408,10 +486,6 @@ def train_model(args=None, cfg_name=None):
     # )
     
     # define a scheduler with warmup 
-    
-    
-    
-    
     gamma, _ = see_steplr_trend(step_size=cfg.stepLR_stepsize, num_epochs=num_epochs, 
                                 lr=lr, final_lr=cfg.final_lr, 
                                 update_inside_epoch=False, len_tr_set=len(tr_set),
@@ -429,6 +503,10 @@ def train_model(args=None, cfg_name=None):
     #     check_dataloader_time(transformer, optimizer, tr_dataloader, cfg, args, scheduler=scheduler, transfer=True)
     #     check_dataloader_time(transformer, optimizer, tr_dataloader, cfg, args, scheduler=scheduler, transfer=False)
 
+    if cfg.use_fabric:
+        transformer, optimizer = fabric.setup(transformer, optimizer)
+        tr_dataloader, val_dataloader= fabric.setup_dataloaders(tr_dataloader, val_dataloader)
+
    
     print(f" {src_vec_dim=} \n {tgt_action_dim=} \n {tgt_states_dim=}")
     pytorch_trainable_params = sum(p.numel() for p in transformer.parameters() if p.requires_grad)
@@ -444,11 +522,18 @@ def train_model(args=None, cfg_name=None):
     checkpoint_model(transformer, model_save_dir, None, optimizer,
             scheduler=scheduler, only_save_states=False)
     
+   
+    plot_grad_k_ep = cfg.plot_grads_k_freq_ep_intvl  if hasattr(cfg, 'plot_grads_k_freq_ep_intvl') else None
+        
     for epoch in range(0, num_epochs):
         print(f"epoch {epoch}")
         epoch_start_time = timer()
         print("\ttraining")
-        train_loss, _ = train_epoch(transformer, optimizer, tr_dataloader, cfg, args, scheduler=scheduler)
+        train_loss, _ = train_epoch(transformer, optimizer, tr_dataloader, 
+                                cfg, args, epoch,
+                                fabric, 
+                                scheduler=scheduler, 
+                                plot_grad_k_ep=plot_grad_k_ep)
         epoch_end_time = timer()
         print("\tevaluating")
         val_loss, _ = evaluate(transformer, val_dataloader, cfg)
@@ -471,7 +556,7 @@ def train_model(args=None, cfg_name=None):
         print('='*60)
         print(f"Epoch: {epoch}")
         for key, val in log_dict.items():
-            print(f"{key}: {format(val,'.4f')}")
+            print(f"{key}: {format(val,'.7f')}")
         print(f"Epoch runtime = {(epoch_end_time - epoch_start_time):.3f}s")
         print(f"time elapsed: {time_elapsed}")
         print("")
@@ -492,7 +577,7 @@ def train_model(args=None, cfg_name=None):
                         save_type='some_epoch',)
                 
         if epoch == cfg.break_training:
-                    break
+            break
         
 
     print("=" * 60)
@@ -514,16 +599,18 @@ NAME_MAP = {
             "v5": "DG3",
             "v5_HW": "HW",
             "v5_GPT_DG3": "GPT_DG3",
-            "v5_DOLS": "DOLS"
+            "v5_DOLS": "DOLS",
+            "v5_Perlin": "Perlin",
+            'v5_Perlin_pptt': "Perlin"
             }
 
 if __name__ == "__main__":
 
     print(f"cuda available: {torch.cuda.is_available()}")
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, default='single_run')
+    parser.add_argument('--mode', type=str, default='sweep')
     parser.add_argument('--quick_run', type=bool, default=False)
-    parser.add_argument('--CFG', type=str, default='v5_GPT_DG3_pptt')
+    parser.add_argument('--CFG', type=str, default='v5_Perlin_pptt')
     args = parser.parse_args()
 
     cfg_name = "cfg/contGrid_" + args.CFG

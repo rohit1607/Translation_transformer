@@ -9,6 +9,7 @@ import seaborn as sns
 import wandb
 from datetime import datetime
 import imageio.v2 as imageio
+from src_utils import setup_env
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import matplotlib.colors as mcol
@@ -57,6 +58,26 @@ class paper_plots:
         # ax.set_facecolor('grey')
         return im
         
+    def plot_vel_field_perlin(self,ax, obs_mask, t,r=0, g_strmplot_lw=1, g_strmplot_arrowsize=1):
+        # Make modes the last axis
+        # Ui = np.transpose(self.env.Ui,(0,2,3,1))
+        # Vi = np.transpose(self.env.Vi,(0,2,3,1))
+        vx_grid = self.env.U[t,:,:] #+ np.dot(Ui[t,:,:,:],self.env.Yi[t,r,:])
+        vy_grid = self.env.V[t,:,:] #+ np.dot(Vi[t,:,:,:],self.env.Yi[t,r,:])
+        vx_grid = np.flipud(vx_grid)
+        vy_grid = np.flipud(vy_grid)
+        Xs = np.arange(0,self.env.xlim) + (self.env.dxy/2)
+        Ys = np.arange(0,self.env.ylim) + (self.env.dxy/2)
+        X,Y = np.meshgrid(Xs, Ys)
+        ax.streamplot(X, Y, vx_grid, vy_grid, color = 'grey', zorder = 0,  linewidth=g_strmplot_lw, arrowsize=g_strmplot_arrowsize, arrowstyle='->')
+        v_mag_grid = (vx_grid**2 + vy_grid**2)**0.5
+        v_mag_grid[np.where(obs_mask==1)]=np.nan
+        ax.contourf(X, Y, v_mag_grid, alpha = 0.9, zorder = -1e5, colors='white')
+        ax.set_facecolor("grey") 
+        im = ax.contourf(X, Y, v_mag_grid, cmap = "Blues", alpha = 0.9, zorder = -1e5)
+        # ax = plt.gca()
+        # ax.set_facecolor('grey')
+        return im
 
     def plot_traj_by_arr(self, traj_dataset, set_str=""):
         info = self.paper_plot_info["trajs_by_arr"]
@@ -112,6 +133,20 @@ class paper_plots:
                        path_lens,
                        success_list,
                         at_time=None):
+        """
+        Plots the input and output trajectories for the given dataset.
+
+        Parameters:
+            traj_dataset (list): The dataset containing trajectory information.
+            obs_mask (list): The mask for observed values.
+            preds_list (list): The list of predicted trajectories.
+            path_lens (list): The lengths of the trajectories.
+            success_list (list): The list of success values.
+            at_time (int, optional): The time at which to plot the trajectories. Defaults to None.
+
+        Returns:
+            None
+        """
         fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10,5))
 
         info = self.paper_plot_info["plot_val_ip_op"]
@@ -131,7 +166,7 @@ class paper_plots:
 
         ax = axs[0]
         self.setup_ax(ax)       
-        im = self.plot_vel_field(ax, obs_mask, t=vmax,r=499)
+        im = self.plot_vel_field_perlin(ax, obs_mask, t=59,r=499)
    
         
         for idx,traj in enumerate(ip_states_list):
@@ -148,14 +183,14 @@ class paper_plots:
         pr_t_dones = []
         ax = axs[1]
         self.setup_ax(ax, show_ylabel=False)
-        im = self.plot_vel_field(ax,obs_mask,t=vmax,r=499)
+        im = self.plot_vel_field_perlin(ax,obs_mask,t=59,r=499)
 
         for idx, traj in enumerate(preds_list):
             states = preds_list[idx]
             t_done = path_lens[idx] 
-            if success_list[idx]:
+            # if success_list[idx]:
                 # ax.scatter(states[:t_done,1], states[:t_done,2], color=sm.to_rgba(t_done), alpha=1, s=1 )
-                ax.plot(states[0,:t_done,1], states[0,:t_done,2], color=sm.to_rgba(t_done), alpha=0.2 )
+            ax.plot(states[0,:t_done,1], states[0,:t_done,2], color=sm.to_rgba(t_done), alpha=0.5 )
                 # ax.scatter(states[-1,1], states[-1,2], alpha=0.5, zorder=10000, s=5)
 
         summary = {}
@@ -189,8 +224,252 @@ class paper_plots:
         save_name = join(self.save_dir,fname)
         plt.savefig(save_name, bbox_inches = 'tight', dpi=600)
 
+    def plot_val_ip_op_target_specific(self, traj_dataset, obs_mask,target_id=1,target_denorm=np.array([40., 40.]),at_time=None,success=True):
+        """
+        TODO: Have to edit (Shubham)
+        Plots the input and output trajectories for the given dataset.
+
+        Parameters:
+            traj_dataset (list): The dataset containing trajectory information.
+            obs_mask (list): The mask for observed values.
+            preds_list (list): The list of predicted trajectories.
+            path_lens (list): The lengths of the trajectories.
+            success_list (list): The list of success values.
+            at_time (int, optional): The time at which to plot the trajectories. Defaults to None.
+
+        Returns:
+            None
+        """
+        op_traj_dict_list = [item for item in self.op_traj_dict_list if item['target_id']==target_id]
+        # op_traj_dict_list = [op_traj_dict_list[0]]
+
+        # fail_list = [item for item in op_traj_dict_list if item['success']==False]
+        # suc_list = [item for item in op_traj_dict_list if item['success']==True]
+        
+        states_mean, states_std = self.stats
+        preds_list = [d['states']*states_std + states_mean for d in op_traj_dict_list]
+        # mask = ~(tensor[:, :, 0] == 1.6226e+01) & ~(tensor[:, :, 1] == 2.1727e+01) & ~(tensor[:, :, 2] == 2.2559e+01)
+        
+        path_lens = [d['n_tsteps'] for d in op_traj_dict_list]
+        success_list = [d['success'] for d in op_traj_dict_list]
+        
+        fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10,5))
+
+        # target_denorm = (target*self.stats[1][1:]) + self.stats[0][1:]
+        # target_denorm = torch.round(target_denorm).numpy()
+        self.env.target_pos = target_denorm
+        info = self.paper_plot_info["plot_val_ip_op_target_specific"]
+        
+        flow_dir_to_index = {item['flow_dir']: index for index, item in enumerate(op_traj_dict_list)}
+                
+        # ip_states_list = [item[3] for item in traj_dataset.dataset if (isinstance(item[8], np.ndarray) and np.array_equal(item[8], target_denorm))]
+        # ip_path_lens = [len(item[2]) for item in traj_dataset.dataset if (isinstance(item[8], np.ndarray) and np.array_equal(item[8], target_denorm))]
+        ip_states_list = [item[3] 
+                        for item in traj_dataset.dataset 
+                        if item[-2] in flow_dir_to_index 
+                        and op_traj_dict_list[flow_dir_to_index[item[-2]]]['flow_dir'] == item[-2]
+                        and isinstance(item[8], np.ndarray) 
+                        and np.array_equal(item[8], target_denorm)
+                    ]
+        ip_path_lens = [len(item[2]) 
+                        for item in traj_dataset.dataset 
+                        if item[-2] in flow_dir_to_index 
+                        and op_traj_dict_list[flow_dir_to_index[item[-2]]]['flow_dir'] == item[-2]
+                        and isinstance(item[8], np.ndarray) 
+                        and np.array_equal(item[8], target_denorm)
+                    ]
+        # vmin = min(path_lens + ip_path_lens)
+        # vmax = max(path_lens + ip_path_lens)
+        vmin = min(ip_path_lens)
+        vmax = max(ip_path_lens)
+
+        # Make a user-defined colormap.
+        cNorm = colors.Normalize(vmin=vmin, vmax=vmax)
+        cmap = plt.get_cmap('YlOrRd')
+        sm = cm.ScalarMappable(norm=cNorm, cmap=cmap)
 
 
+        ax = axs[0]
+        self.setup_ax(ax)       
+        im = self.plot_vel_field_perlin(ax, obs_mask, t=59,r=499)
+   
+        
+        for idx,traj in enumerate(ip_states_list):
+            states = ip_states_list[idx]
+            t_done = ip_path_lens[idx]
+            ax.plot(states[:t_done+1,1], states[:t_done+1,2], color=sm.to_rgba(t_done))
+
+        pr_t_dones = []
+        ax = axs[1]
+        self.setup_ax(ax, show_ylabel=False)
+        im = self.plot_vel_field_perlin(ax,obs_mask,t=59,r=499)
+
+        for idx, traj in enumerate(preds_list):
+            states = preds_list[idx]
+            states = torch.where(states == states[-1, -1], torch.zeros_like(states), states)
+            states = (states[(states != 0).any(dim=-1)]).unsqueeze(dim=0)
+            t_done = path_lens[idx]
+            if success: 
+                if success_list[idx]:
+                    ax.plot(states[0,:t_done+1,1], states[0,:t_done+1,2], color=sm.to_rgba(t_done))
+            else:
+                if not success_list[idx]:
+                    ax.plot(states[0,:t_done+1,1], states[0,:t_done+1,2], color=sm.to_rgba(t_done))
+
+        summary = {}
+        summary["mean Tarr logged dataset"] = np.mean(ip_path_lens)
+        summary["std Tarr logged dataset"] = np.std(ip_path_lens)
+        summary["mean Tarr prediction" ] = np.mean(path_lens)
+        summary["std Tarr prediction" ] = np.std(path_lens)
+        summary["success rate"] = np.sum([int(item) for item in success_list])/len(success_list)
+        summary["prediction count"] = len(success_list)
+        print(f"------ SUMMARY_{target_denorm}_Success={success}-------\n", summary)
+        
+        plt.subplots_adjust( left= 0.1, right=0.9, top=0.9, bottom=0.2, wspace=-0.05)
+
+        cax_arr = ax.inset_axes([1.05, 0, 0.05, 1])
+        cax_vel = ax.inset_axes([1.30, 0, 0.05, 1])
+        cbar_fontsize = 15
+        cbar = fig.colorbar(sm, ax=axs.ravel().tolist(), cax=cax_arr)
+        cbar.set_label("Arrival Time (non-dim)", fontsize=cbar_fontsize)
+     
+        cbarv = fig.colorbar(im, ax=axs.ravel().tolist(), cax=cax_vel)
+        cbarv.set_label("Velocity Magnitude (non-dim)", fontsize=cbar_fontsize)
+
+        plt.suptitle(f'Target: {target_denorm}', fontsize=15)
+        fname = info["fname"]+f"_{target_id}_Success={success}"
+        save_name = join(self.save_dir,fname)
+        plt.savefig(save_name, bbox_inches = 'tight', dpi=600)
+        
+
+        
+    def plot_success_non_success(self, traj_dataset, obs_mask):
+        self.plot_val_ip_op_target_specific(traj_dataset, obs_mask,target_id=0,target_denorm=np.array([40., 40.]), success=True)
+        # self.plot_val_ip_op_target_specific(traj_dataset, obs_mask,target_id=1,target_denorm=np.array([35., 25.]), success=True)
+        # self.plot_val_ip_op_target_specific(traj_dataset, obs_mask,target_id=2,target_denorm=np.array([25., 35.]), success=True)
+        self.plot_val_ip_op_target_specific(traj_dataset, obs_mask,target_id=0,target_denorm=np.array([40., 40.]), success=False)
+        # self.plot_val_ip_op_target_specific(traj_dataset, obs_mask,target_id=1,target_denorm=np.array([35., 25.]), success=False)
+        # self.plot_val_ip_op_target_specific(traj_dataset, obs_mask,target_id=2,target_denorm=np.array([25., 35.]), success=False)
+
+    def plot_specific_perlin_path(self, traj_dataset, obs_mask,target_id=1,target_denorm=np.array([40., 40.]),at_time=None,success=True):
+        """
+        TODO: Have to edit (Shubham)
+        Plots the input and output trajectories for the given dataset for specific perlin flow 
+
+        Parameters:
+            traj_dataset (list): The dataset containing trajectory information.
+            obs_mask (list): The mask for observed values.
+            preds_list (list): The list of predicted trajectories.
+            path_lens (list): The lengths of the trajectories.
+            success_list (list): The list of success values.
+            at_time (int, optional): The time at which to plot the trajectories. Defaults to None.
+
+        Returns:
+            None
+        """
+        op_traj_dict_list = [item for item in self.op_traj_dict_list if item['target_id']==target_id and item['success']==True]
+        op_traj_dict_list = [op_traj_dict_list[3]]
+        flow_dir = op_traj_dict_list[0]['flow_dir']
+        # fail_list = [item for item in op_traj_dict_list if item['success']==False]
+        # suc_list = [item for item in op_traj_dict_list if item['success']==True]
+        self.env = setup_env(flow_dir, target_id=-1)
+        states_mean, states_std = self.stats
+        preds_list = [d['states']*states_std + states_mean for d in op_traj_dict_list]
+        # mask = ~(tensor[:, :, 0] == 1.6226e+01) & ~(tensor[:, :, 1] == 2.1727e+01) & ~(tensor[:, :, 2] == 2.2559e+01)
+        
+        path_lens = [d['n_tsteps'] for d in op_traj_dict_list]
+        success_list = [d['success'] for d in op_traj_dict_list]
+        
+        fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10,5))
+
+        # target_denorm = (target*self.stats[1][1:]) + self.stats[0][1:]
+        # target_denorm = torch.round(target_denorm).numpy()
+        self.env.target_pos = target_denorm
+        info = self.paper_plot_info["plot_specific_perlin_path"]
+        
+        flow_dir_to_index = {item['flow_dir']: index for index, item in enumerate(op_traj_dict_list)}
+                
+        # ip_states_list = [item[3] for item in traj_dataset.dataset if (isinstance(item[8], np.ndarray) and np.array_equal(item[8], target_denorm))]
+        # ip_path_lens = [len(item[2]) for item in traj_dataset.dataset if (isinstance(item[8], np.ndarray) and np.array_equal(item[8], target_denorm))]
+        ip_states_list = [item[3] 
+                        for item in traj_dataset.dataset 
+                        if item[-2] in flow_dir_to_index 
+                        and op_traj_dict_list[flow_dir_to_index[item[-2]]]['flow_dir'] == item[-2]
+                        and isinstance(item[8], np.ndarray) 
+                        and np.array_equal(item[8], target_denorm)
+                    ]
+        ip_path_lens = [len(item[2]) 
+                        for item in traj_dataset.dataset 
+                        if item[-2] in flow_dir_to_index 
+                        and op_traj_dict_list[flow_dir_to_index[item[-2]]]['flow_dir'] == item[-2]
+                        and isinstance(item[8], np.ndarray) 
+                        and np.array_equal(item[8], target_denorm)
+                    ]
+        # vmin = min(path_lens + ip_path_lens)
+        # vmax = max(path_lens + ip_path_lens)
+        vmin = min(ip_path_lens)
+        vmax = max(ip_path_lens)
+
+        # Make a user-defined colormap.
+        cNorm = colors.Normalize(vmin=vmin, vmax=vmax)
+        cmap = plt.get_cmap('YlOrRd')
+        sm = cm.ScalarMappable(norm=cNorm, cmap=cmap)
+
+
+        ax = axs[0]
+        self.setup_ax(ax)       
+        im = self.plot_vel_field_perlin(ax, obs_mask, t=59,r=499)
+   
+        
+        for idx,traj in enumerate(ip_states_list):
+            states = ip_states_list[idx]
+            t_done = ip_path_lens[idx]
+            ax.plot(states[:t_done+1,1], states[:t_done+1,2], color=sm.to_rgba(t_done))
+
+        pr_t_dones = []
+        ax = axs[1]
+        self.setup_ax(ax, show_ylabel=False)
+        im = self.plot_vel_field_perlin(ax,obs_mask,t=59,r=499)
+
+        for idx, traj in enumerate(preds_list):
+            states = preds_list[idx]
+            states = torch.where(states == states[-1, -1], torch.zeros_like(states), states)
+            states = (states[(states != 0).any(dim=-1)]).unsqueeze(dim=0)
+            t_done = path_lens[idx]
+            if success: 
+                if success_list[idx]:
+                    ax.plot(states[0,:t_done+1,1], states[0,:t_done+1,2], color=sm.to_rgba(t_done))
+            else:
+                if not success_list[idx]:
+                    ax.plot(states[0,:t_done+1,1], states[0,:t_done+1,2], color=sm.to_rgba(t_done))
+
+        summary = {}
+        summary["mean Tarr logged dataset"] = np.mean(ip_path_lens)
+        summary["std Tarr logged dataset"] = np.std(ip_path_lens)
+        summary["mean Tarr prediction" ] = np.mean(path_lens)
+        summary["std Tarr prediction" ] = np.std(path_lens)
+        summary["success rate"] = np.sum([int(item) for item in success_list])/len(success_list)
+        summary["prediction count"] = len(success_list)
+        print(f"------ SUMMARY_{target_denorm}_Success={success}-------\n", summary)
+        
+        plt.subplots_adjust( left= 0.1, right=0.9, top=0.9, bottom=0.2, wspace=-0.05)
+
+        cax_arr = ax.inset_axes([1.05, 0, 0.05, 1])
+        cax_vel = ax.inset_axes([1.30, 0, 0.05, 1])
+        cbar_fontsize = 15
+        cbar = fig.colorbar(sm, ax=axs.ravel().tolist(), cax=cax_arr)
+        cbar.set_label("Arrival Time (non-dim)", fontsize=cbar_fontsize)
+     
+        cbarv = fig.colorbar(im, ax=axs.ravel().tolist(), cax=cax_vel)
+        cbarv.set_label("Velocity Magnitude (non-dim)", fontsize=cbar_fontsize)
+
+        flow_dir = np.int32(flow_dir.split('/')[-1].split('_')[-1])
+        plt.suptitle(f'Target: {target_denorm} Flow_dir: {flow_dir}', fontsize=15)
+        fname = info["fname"]+f"_{target_id}_Success={success}_Flow_dir={flow_dir}.png"
+        save_name = join(self.save_dir,fname)
+        plt.savefig(save_name, bbox_inches = 'tight', dpi=600) 
+    
+                
     def plot_actions(self, traj_dataset,
                        preds_list,
                        path_lens,
@@ -439,12 +718,12 @@ class paper_plots:
         
             if self.env.target_pos.ndim == 1:
                 ax.scatter(self.env.target_pos[0], self.env.target_pos[1], color='k', marker='*')
-                target_circle = plt.Circle(self.env.target_pos, self.env.target_rad, color='r', alpha=0.3)
+                target_circle = plt.Circle(self.env.target_pos, self.env.target_rad, color='r', alpha=0.5)
                 ax.add_patch(target_circle)
             elif self.env.target_pos.ndim > 1:
                 for target_pos in self.env.target_pos:
                     ax.scatter(target_pos[0], target_pos[1], color='k', marker='*')
-                    target_circle = plt.Circle(target_pos, self.env.target_rad, color='r', alpha=0.3)
+                    target_circle = plt.Circle(target_pos, self.env.target_rad, color='r', alpha=0.5)
                     ax.add_patch(target_circle)
 
 
@@ -677,3 +956,118 @@ class paper_plots:
     #     fname = info["fname"] 
     #     save_name = join(self.save_dir,fname)
     #     plt.savefig(save_name, bbox_inches = 'tight', dpi=600)
+    
+    
+    
+    
+    def plot_val_ip_op_target_specific_not_successful(self, traj_dataset, obs_mask,target_id=1,target_denorm=np.array([40., 40.]),at_time=None,):
+        """
+        TODO: Have to edit (Shubham)
+        Plots the input and output trajectories for the given dataset.
+
+        Parameters:
+            traj_dataset (list): The dataset containing trajectory information.
+            obs_mask (list): The mask for observed values.
+            preds_list (list): The list of predicted trajectories.
+            path_lens (list): The lengths of the trajectories.
+            success_list (list): The list of success values.
+            at_time (int, optional): The time at which to plot the trajectories. Defaults to None.
+
+        Returns:
+            None
+        """
+        op_traj_dict_list = [item for item in self.op_traj_dict_list if item['target_id']==target_id]
+        # op_traj_dict_list = [item for item in self.op_traj_dict_list if item['success']==False and item['target_id']==target_id]
+        # op_traj_dict_list = [op_traj_dict_list[0]]
+        # op_traj_dict_list_non_successful = [item for item in self.op_traj_dict_list if item['success']==False]
+        # op_traj_dict_list = [item for item in self.op_traj_dict_list if item['success']==False and item['target_id']==target_id and item["flow_dir"]=='/media/HDD/rohit/Translation_transformer/my-translat-transformer/data/Perlin/Mag_0.8/Perlin_g50x50x60_212']
+        states_mean, states_std = self.stats
+        preds_list = [d['states']*states_std + states_mean for d in op_traj_dict_list]
+        # mask = ~(tensor[:, :, 0] == 1.6226e+01) & ~(tensor[:, :, 1] == 2.1727e+01) & ~(tensor[:, :, 2] == 2.2559e+01)
+        
+        path_lens = [d['n_tsteps'] for d in op_traj_dict_list]
+        success_list = [d['success'] for d in op_traj_dict_list]
+        
+        fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10,5))
+
+        # target_denorm = (target*self.stats[1][1:]) + self.stats[0][1:]
+        # target_denorm = torch.round(target_denorm).numpy()
+        self.env.target_pos = target_denorm
+        info = self.paper_plot_info["plot_val_ip_op_target_specific_not_successful"]
+        
+        flow_dir_to_index = {item['flow_dir']: index for index, item in enumerate(op_traj_dict_list)}
+                
+        # ip_states_list = [item[3] for item in traj_dataset.dataset if (isinstance(item[8], np.ndarray) and np.array_equal(item[8], target_denorm))]
+        # ip_path_lens = [len(item[2]) for item in traj_dataset.dataset if (isinstance(item[8], np.ndarray) and np.array_equal(item[8], target_denorm))]
+        ip_states_list = [item[3] 
+                        for item in traj_dataset.dataset 
+                        if item[-2] in flow_dir_to_index 
+                        and op_traj_dict_list[flow_dir_to_index[item[-2]]]['flow_dir'] == item[-2]
+                        and isinstance(item[8], np.ndarray) 
+                        and np.array_equal(item[8], target_denorm)
+                    ]
+        ip_path_lens = [len(item[2]) 
+                        for item in traj_dataset.dataset 
+                        if item[-2] in flow_dir_to_index 
+                        and op_traj_dict_list[flow_dir_to_index[item[-2]]]['flow_dir'] == item[-2]
+                        and isinstance(item[8], np.ndarray) 
+                        and np.array_equal(item[8], target_denorm)
+                    ]
+        # vmin = min(path_lens + ip_path_lens)
+        # vmax = max(path_lens + ip_path_lens)
+        vmin = min(ip_path_lens)
+        vmax = max(ip_path_lens)
+
+        # Make a user-defined colormap.
+        cNorm = colors.Normalize(vmin=vmin, vmax=vmax)
+        cmap = plt.get_cmap('YlOrRd')
+        sm = cm.ScalarMappable(norm=cNorm, cmap=cmap)
+
+
+        ax = axs[0]
+        self.setup_ax(ax)       
+        im = self.plot_vel_field_perlin(ax, obs_mask, t=59,r=499)
+   
+        
+        for idx,traj in enumerate(ip_states_list):
+            states = ip_states_list[idx]
+            t_done = ip_path_lens[idx]
+            ax.plot(states[:t_done+1,1], states[:t_done+1,2], color=sm.to_rgba(t_done))
+
+        pr_t_dones = []
+        ax = axs[1]
+        self.setup_ax(ax, show_ylabel=False)
+        im = self.plot_vel_field_perlin(ax,obs_mask,t=59,r=499)
+
+        for idx, traj in enumerate(preds_list):
+            states = preds_list[idx]
+            states = torch.where(states == states[-1, -1], torch.zeros_like(states), states)
+            states = (states[(states != 0).any(dim=-1)]).unsqueeze(dim=0)
+            t_done = path_lens[idx] 
+            if not success_list[idx]:
+                ax.plot(states[0,:t_done+1,1], states[0,:t_done+1,2], color=sm.to_rgba(t_done))
+
+        summary = {}
+        summary["mean Tarr logged dataset"] = np.mean(ip_path_lens)
+        summary["std Tarr logged dataset"] = np.std(ip_path_lens)
+        summary["mean Tarr prediction" ] = np.mean(path_lens)
+        summary["std Tarr prediction" ] = np.std(path_lens)
+        summary["success rate"] = np.sum([int(item) for item in success_list])/len(success_list)
+        summary["prediction count"] = len(success_list)
+        print(f"------ SUMMARY_{target_denorm}-------\n", summary)
+        
+        plt.subplots_adjust( left= 0.1, right=0.9, top=0.9, bottom=0.2, wspace=-0.05)
+
+        cax_arr = ax.inset_axes([1.05, 0, 0.05, 1])
+        cax_vel = ax.inset_axes([1.30, 0, 0.05, 1])
+        cbar_fontsize = 15
+        cbar = fig.colorbar(sm, ax=axs.ravel().tolist(), cax=cax_arr)
+        cbar.set_label("Arrival Time (non-dim)", fontsize=cbar_fontsize)
+     
+        cbarv = fig.colorbar(im, ax=axs.ravel().tolist(), cax=cax_vel)
+        cbarv.set_label("Velocity Magnitude (non-dim)", fontsize=cbar_fontsize)
+
+        plt.suptitle(f'Target: {target_denorm}', fontsize=15)
+        fname = info["fname"]+f"_{target_id}"
+        save_name = join(self.save_dir,fname)
+        plt.savefig(save_name, bbox_inches = 'tight', dpi=600)
